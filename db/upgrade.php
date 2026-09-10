@@ -556,6 +556,29 @@ function xmldb_block_nvq_matrix_upgrade(int $oldversion): bool {
         // the capability's own declared contextlevel.
         $companymanagerrole = $DB->get_record('role', ['shortname' => 'companymanager']);
         if ($companymanagerrole) {
+            // Registration-timing fix (2026091703): block/nvq_matrix:
+            // manageassessor was declared brand-new exactly one version
+            // bump ago (2026081801, see that block's own comment).
+            // update_capabilities() only registers newly-declared
+            // capabilities from db/access.php AFTER the whole upgrade
+            // function returns, not between individual version-gated
+            // blocks within the same run - on the incremental one-
+            // version-at-a-time deploys this plugin was normally pushed
+            // through, that registration had already happened via the
+            // PREVIOUS request by the time this step ran, so this never
+            // surfaced. On a large multi-version jump (every block
+            // executing within a single upgrade run - confirmed live,
+            // cliffordtraining.com IOMAD deploy, 2026-09-10), it hasn't
+            // registered yet, and assign_capability() below throws a
+            // coding_exception for an unrecognised capability. Same
+            // root cause already documented and guarded for
+            // :deletearchived a few steps later (2026082701) - fixed
+            // here the way that guard's own comment recommends: an
+            // early, explicit, confirmed-safe-and-idempotent resync,
+            // rather than a bare get_capability_info() skip that would
+            // silently drop the intended Prevent from this run.
+            update_capabilities('block_nvq_matrix');
+
             $systemcontext = context_system::instance();
             $preventcapabilities = [
                 'block/nvq_matrix:sample',

@@ -17,6 +17,30 @@
 /**
  * Version metadata for the block_nvq_matrix plugin.
  *
+ * v27.0.2 (1.21.2) — Fixed a pre-existing upgrade-path bug, surfaced by
+ *   this being the first time this plugin was ever upgraded across many
+ *   versions in a single run (cliffordtraining.com IOMAD deploy,
+ *   2026-09-10, jumping from 1.17.20 straight to 1.21.1). The
+ *   2026082101 step's assign_capability() Prevent for
+ *   block/nvq_matrix:manageassessor on the companymanager role threw
+ *   "Capability ... was not found" - manageassessor was declared
+ *   brand-new one version bump earlier (2026081801), and
+ *   update_capabilities() only registers newly-declared capabilities
+ *   AFTER the whole upgrade function returns, not between individual
+ *   version-gated blocks within the same run. On this plugin's normal
+ *   one-version-at-a-time production deploys that registration had
+ *   always already happened via the previous request by the time this
+ *   step ran, so it never surfaced before now. Exact same root cause
+ *   already documented and guarded for :deletearchived a few steps
+ *   later (2026082701) - fixed the same way that guard's own comment
+ *   recommends: db/upgrade.php's 2026082101 block now calls
+ *   update_capabilities('block_nvq_matrix') immediately before its
+ *   assign_capability() loop, forcing an early, confirmed-safe,
+ *   idempotent resync so the intended Prevent still actually applies
+ *   in the same run, rather than silently skipping it. No behaviour
+ *   change on a fresh install or on the normal incremental deploy path
+ *   this bug never affected. No schema change.
+ *
  * v27.0.1 (1.21.1) — Follow-up to v27.0.0's group-isolation pass:
  *   assessor_manage.php's "current assessor" lookup could still reveal
  *   the NAME of a currently-designated assessor outside a restricted
@@ -2863,7 +2887,7 @@
 
 defined('MOODLE_INTERNAL') || die();
 
-$plugin->version   = 2026091702;
+$plugin->version   = 2026091703;
 $plugin->requires  = 2024100700; // Moodle 4.5 — floor only, nothing here is version-pinned above that.
 // $plugin->supported deliberately omitted. Setting an upper branch number here
 // (e.g. [405, 501]) only controls a cosmetic "not officially supported"
@@ -2878,4 +2902,4 @@ $plugin->requires  = 2024100700; // Moodle 4.5 — floor only, nothing here is v
 // clear error on upgrade — re-test at that point rather than pre-emptively.
 $plugin->component = 'block_nvq_matrix';
 $plugin->maturity  = MATURITY_STABLE;
-$plugin->release   = '1.21.1';
+$plugin->release   = '1.21.2';
