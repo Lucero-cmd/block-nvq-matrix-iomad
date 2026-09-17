@@ -1358,9 +1358,28 @@ class matrix_data {
      * @return bool
      */
     public static function has_student_archetype_role(\context $context, int $userid): bool {
+        global $DB;
+        // Fix (v27.0.5): get_user_roles()'s returned objects carry
+        // ->shortname and ->roleid but NEVER ->archetype - confirmed
+        // live on cliffordtraining.com, 2026-09-17, via a direct
+        // var_dump() of its actual return shape. The original check
+        // (`$role->archetype === 'student'`) was therefore comparing
+        // against undefined/null on every single call, for every user,
+        // silently failing closed - emptying $students entirely for
+        // every canviewall viewer on every course, breaking the whole
+        // matrix dropdown platform-wide within minutes of deploying
+        // v27.0.4. Fixed by resolving each role's real archetype from
+        // {role} directly, keyed by roleid (which IS reliably present),
+        // cached statically so this costs one small query per request
+        // no matter how many users/roles are checked.
+        static $archetypesbyroleid = null;
+        if ($archetypesbyroleid === null) {
+            $archetypesbyroleid = $DB->get_records_menu('role', [], '', 'id, archetype');
+        }
         $roles = get_user_roles($context, $userid, true);
         foreach ($roles as $role) {
-            if ($role->archetype === 'student') {
+            $archetype = $archetypesbyroleid[$role->roleid] ?? null;
+            if ($archetype === 'student') {
                 return true;
             }
         }

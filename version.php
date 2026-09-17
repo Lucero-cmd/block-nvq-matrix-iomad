@@ -17,6 +17,22 @@
 /**
  * Version metadata for the block_nvq_matrix plugin.
  *
+ * v27.0.5 (1.21.5) — URGENT REGRESSION FIX for v27.0.4.
+ *   matrix_data::has_student_archetype_role() checked
+ *   $role->archetype on objects returned by get_user_roles() - but
+ *   that function's return shape carries ->shortname and ->roleid,
+ *   never ->archetype (confirmed live via a direct var_dump of its
+ *   actual output, 2026-09-17). The check was therefore comparing
+ *   against undefined/null on every single call, for every user, on
+ *   every course - failing closed and emptying $students entirely for
+ *   every canviewall viewer platform-wide within minutes of deploying
+ *   v27.0.4, breaking the matrix dropdown for everyone. Fixed by
+ *   resolving each role's real archetype from {role} directly, keyed
+ *   by roleid (which IS reliably present on get_user_roles()'s
+ *   result), cached statically per request. No schema change. Deploy
+ *   this immediately and re-verify against the live course 7/8/9 test
+ *   accounts before considering v27.0.4's fixes done.
+ *
  * v27.0.4 (1.21.4) — Two live findings from real-account testing on
  *   cliffordtraining.com, both traced to the same root cause: this
  *   plugin's own capabilities (:viewall, :grade, :sample, etc.) are
@@ -2957,7 +2973,7 @@
 
 defined('MOODLE_INTERNAL') || die();
 
-$plugin->version   = 2026091705;
+$plugin->version   = 2026091706;
 $plugin->requires  = 2024100700; // Moodle 4.5 — floor only, nothing here is version-pinned above that.
 // $plugin->supported deliberately omitted. Setting an upper branch number here
 // (e.g. [405, 501]) only controls a cosmetic "not officially supported"
@@ -2972,4 +2988,4 @@ $plugin->requires  = 2024100700; // Moodle 4.5 — floor only, nothing here is v
 // clear error on upgrade — re-test at that point rather than pre-emptively.
 $plugin->component = 'block_nvq_matrix';
 $plugin->maturity  = MATURITY_STABLE;
-$plugin->release   = '1.21.4';
+$plugin->release   = '1.21.5';
