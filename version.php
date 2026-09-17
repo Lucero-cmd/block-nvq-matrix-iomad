@@ -17,6 +17,30 @@
 /**
  * Version metadata for the block_nvq_matrix plugin.
  *
+ * v27.0.3 (1.21.3) — URGENT REGRESSION FIX. matrix_data::is_group_
+ *   restricted() was missing the course-groupmode check entirely -
+ *   it treated a viewer lacking moodle/site:accessallgroups as
+ *   group-restricted on EVERY course, including a company's own plain
+ *   course with no group structure at all. This is a direct violation
+ *   of the multi-tenant isolation guide's own canonical pattern
+ *   ("if course groupmode != SEPARATEGROUPS: return users unchanged -
+ *   most courses here are single-company, no groups at all"), missed
+ *   when v27.0.0 generalised the restriction from a hardcoded
+ *   'companymanager' check to an accessallgroups-driven one. Confirmed
+ *   live on cliffordtraining.com: Assessor and Company Manager could
+ *   see the course dropdown (a separate, untouched code path fed by
+ *   enrol_get_users_courses()) but not a single student in the matrix
+ *   itself, even on their own company's own ungrouped course (courses
+ *   8/9) - only the platform's one genuinely forced-SEPARATEGROUPS
+ *   course (course 7) was ever meant to trigger any restriction at
+ *   all. Fixed by checking the course's actual groupmode before
+ *   treating a viewer as restricted; an ungrouped course is now always
+ *   fully visible to any role holding the underlying capability,
+ *   exactly as it always was before this engagement, while a genuinely
+ *   forced-SEPARATEGROUPS course (course 7) is unaffected by this fix -
+ *   re-verify against course 7's live Grace Kim / Marcus Webb test
+ *   after deploying. No schema change.
+ *
  * v27.0.2 (1.21.2) — Fixed a pre-existing upgrade-path bug, surfaced by
  *   this being the first time this plugin was ever upgraded across many
  *   versions in a single run (cliffordtraining.com IOMAD deploy,
@@ -2887,7 +2911,7 @@
 
 defined('MOODLE_INTERNAL') || die();
 
-$plugin->version   = 2026091703;
+$plugin->version   = 2026091704;
 $plugin->requires  = 2024100700; // Moodle 4.5 — floor only, nothing here is version-pinned above that.
 // $plugin->supported deliberately omitted. Setting an upper branch number here
 // (e.g. [405, 501]) only controls a cosmetic "not officially supported"
@@ -2902,4 +2926,4 @@ $plugin->requires  = 2024100700; // Moodle 4.5 — floor only, nothing here is v
 // clear error on upgrade — re-test at that point rather than pre-emptively.
 $plugin->component = 'block_nvq_matrix';
 $plugin->maturity  = MATURITY_STABLE;
-$plugin->release   = '1.21.2';
+$plugin->release   = '1.21.3';

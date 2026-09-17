@@ -1337,14 +1337,38 @@ class matrix_data {
      *              (i.e. this plugin's own queries must filter for them).
      */
     public static function is_group_restricted(int $courseid, ?int $userid = null): bool {
-        global $USER;
+        global $USER, $DB;
         $userid = $userid ?? (int) $USER->id;
         $context = \context_course::instance($courseid, IGNORE_MISSING);
         if (!$context) {
             // No valid course context — fail closed, not open.
             return true;
         }
-        return !has_capability('moodle/site:accessallgroups', $context, $userid);
+        if (has_capability('moodle/site:accessallgroups', $context, $userid)) {
+            return false;
+        }
+
+        // Fix (v27.0.3): matches the multi-tenant isolation guide's own
+        // canonical group-isolation pattern exactly - "if course
+        // groupmode != SEPARATEGROUPS: return users unchanged - most
+        // courses here are single-company, no groups at all". This
+        // check was missing entirely: a viewer lacking accessallgroups
+        // was being treated as group-restricted on EVERY course,
+        // including a company's own plain course with no group
+        // structure configured at all (only the shared course 7 on
+        // this platform actually runs forced SEPARATEGROUPS). On such
+        // a course the viewer legitimately belongs to zero groups
+        // (there are none to belong to), so the filter emptied their
+        // entire student list - confirmed live: Assessor and Company
+        // Manager could see the course dropdown (a different, untouched
+        // code path) but not a single student in the matrix itself,
+        // even on their own company's own course. Only an ACTUAL
+        // forced-separate-groups course now triggers any restriction at
+        // all; an ungrouped course is always fully visible to every
+        // role that holds the underlying capability, exactly as before
+        // this whole engagement started.
+        $groupmode = $DB->get_field('course', 'groupmode', ['id' => $courseid], IGNORE_MISSING);
+        return ((int) $groupmode) === SEPARATEGROUPS;
     }
 
     /**
