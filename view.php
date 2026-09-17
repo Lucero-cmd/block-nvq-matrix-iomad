@@ -231,7 +231,15 @@ if ($canviewall) {
         }
 
         foreach ($enrolled as $u) {
-            if (!has_capability('block/nvq_matrix:viewall', $ctx, $u->id)) {
+            // Fix (v27.0.4): "!has :viewall" alone is not enough to mean
+            // "is a student" - a non-learner reviewer role (see
+            // matrix_data::has_student_archetype_role()'s own docblock)
+            // also lacks :viewall, and was being incorrectly listed
+            // alongside genuine learners. Only someone actually holding
+            // a student-archetype role is now bucketed in here.
+            if (!has_capability('block/nvq_matrix:viewall', $ctx, $u->id)
+                && matrix_data::has_student_archetype_role($ctx, $u->id)
+            ) {
                 if (!isset($students[$u->id])) {
                     $students[$u->id] = $u;
                 }

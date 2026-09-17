@@ -17,6 +17,52 @@
 /**
  * Version metadata for the block_nvq_matrix plugin.
  *
+ * v27.0.4 (1.21.4) — Two live findings from real-account testing on
+ *   cliffordtraining.com, both traced to the same root cause: this
+ *   plugin's own capabilities (:viewall, :grade, :sample, etc.) are
+ *   granted only via Moodle archetype defaults (teacher/editingteacher
+ *   /manager), and IOMAD's own custom roles (companycourseeditor,
+ *   companycoursenoneditor) each carry their OWN custom archetype name
+ *   (not a core one - see the IOMAD architecture guide's Section 1.7
+ *   "custom archetypes are a trap"), so they inherit nothing from this
+ *   plugin's archetype-based defaults at all.
+ *
+ *   1. Priya Shaw (Bridgeport's own companycourseeditor / "Client
+ *      Course Editor") could not see her own company's course in the
+ *      matrix at all. Fix, matching the client's explicit scope
+ *      decision (view + export, not edit - grading stays with
+ *      Assessor/IQA/EQA): companycourseeditor now explicitly granted
+ *      block/nvq_matrix:viewall and :exportportfolio, both in
+ *      db/access.php's archetypes arrays (for a genuinely brand-new
+ *      install) and via a new upgrade step assign_capability()-ing
+ *      both onto the role directly (for this and every existing
+ *      install, since Moodle only computes archetype defaults once,
+ *      at the moment a capability is first registered - editing
+ *      db/access.php alone never retroactively re-applies to an
+ *      existing site). Deliberately does NOT touch :grade, :sample,
+ *      :iqacomment, :finalstatus, :manageassessor or :deletearchived -
+ *      this role stays read-only for actual grading/verification here.
+ *
+ *   2. Alex Chen and Priya Shaw (as companycoursenoneditor - the
+ *      default role IOMAD auto-assigns to a Company Manager reviewing
+ *      a shared course, see the IOMAD architecture guide's role table)
+ *      were incorrectly appearing in the STUDENT list on course 7.
+ *      view.php's classification logic was "anyone enrolled who lacks
+ *      :viewall is a student" - true for a genuine learner, but also
+ *      true for this reviewer role, since it was never granted
+ *      :viewall (or anything else) either. Fixed with a new
+ *      matrix_data::has_student_archetype_role() check: a user is only
+ *      bucketed as a student if they actually hold a role whose
+ *      archetype is 'student', not merely by elimination. Deliberately
+ *      does NOT grant companycoursenoneditor any nvq_matrix capability -
+ *      they now correctly appear in neither list, matching the
+ *      principle of least privilege for a role whose entire purpose on
+ *      a shared course is reviewing before deciding whether to roll it
+ *      out to their own staff, not grading or being graded.
+ *
+ *   No schema change. Re-verify against the live course 7/8/9 test
+ *   accounts after deploying.
+ *
  * v27.0.3 (1.21.3) — URGENT REGRESSION FIX. matrix_data::is_group_
  *   restricted() was missing the course-groupmode check entirely -
  *   it treated a viewer lacking moodle/site:accessallgroups as
@@ -2911,7 +2957,7 @@
 
 defined('MOODLE_INTERNAL') || die();
 
-$plugin->version   = 2026091704;
+$plugin->version   = 2026091705;
 $plugin->requires  = 2024100700; // Moodle 4.5 — floor only, nothing here is version-pinned above that.
 // $plugin->supported deliberately omitted. Setting an upper branch number here
 // (e.g. [405, 501]) only controls a cosmetic "not officially supported"
@@ -2926,4 +2972,4 @@ $plugin->requires  = 2024100700; // Moodle 4.5 — floor only, nothing here is v
 // clear error on upgrade — re-test at that point rather than pre-emptively.
 $plugin->component = 'block_nvq_matrix';
 $plugin->maturity  = MATURITY_STABLE;
-$plugin->release   = '1.21.3';
+$plugin->release   = '1.21.4';

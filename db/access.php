@@ -44,13 +44,23 @@ $capabilities = [
         'clonepermissionsfrom' => 'moodle/my:manageblocks',
     ],
     // Capability to view all students' matrices (assessors, IQA, EQA, managers).
+    // companycourseeditor (v27.0.4, IOMAD fork): "Client Course Editor" is
+    // the company's own admin for their course, view-only for this
+    // plugin specifically - they build/edit the underlying exacomp
+    // competence framework (see block_exacomp's own capability grant),
+    // but grading/sampling/final-status here stays with the actual
+    // Assessor/IQA/EQA role holders. This grant alone (view, not edit -
+    // see :grade/:sample/etc below, which deliberately do NOT include
+    // this archetype) is what lets them see the matrix at all; without
+    // it they were invisible from their own company's course entirely.
     'block/nvq_matrix:viewall' => [
         'captype'      => 'read',
         'contextlevel' => CONTEXT_COURSE,
         'archetypes'   => [
-            'teacher'        => CAP_ALLOW,
-            'editingteacher' => CAP_ALLOW,
-            'manager'        => CAP_ALLOW,
+            'teacher'               => CAP_ALLOW,
+            'editingteacher'        => CAP_ALLOW,
+            'manager'               => CAP_ALLOW,
+            'companycourseeditor'   => CAP_ALLOW,
         ],
     ],
     // Capability to set the per-unit sampling status (Sampled / Not Yet Sampled).
@@ -168,9 +178,13 @@ $capabilities = [
         'captype'      => 'read',
         'contextlevel' => CONTEXT_COURSE,
         'archetypes'   => [
-            'teacher'        => CAP_ALLOW,
-            'editingteacher' => CAP_ALLOW,
-            'manager'        => CAP_ALLOW,
+            'teacher'               => CAP_ALLOW,
+            'editingteacher'        => CAP_ALLOW,
+            'manager'               => CAP_ALLOW,
+            // companycourseeditor (v27.0.4, IOMAD fork): explicitly
+            // requested alongside :viewall - view-only for grading, but
+            // still needs to export a student's full portfolio.
+            'companycourseeditor'   => CAP_ALLOW,
         ],
     ],
     // Capability to permanently delete an ARCHIVED (no longer actively

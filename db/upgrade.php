@@ -1143,5 +1143,41 @@ function xmldb_block_nvq_matrix_upgrade(int $oldversion): bool {
         // Nvq_matrix savepoint reached.
         upgrade_block_savepoint(true, 2026091700, 'nvq_matrix');
     }
+
+    if ($oldversion < 2026091705) {
+        // Grant Client Course Editor (companycourseeditor) view +
+        // export access to nvq_matrix on their own company's course
+        // (v27.0.4, IOMAD fork). Client decision 2026-09-17: this role
+        // is the company's own admin for the course - view-only here
+        // (grading stays with Assessor/IQA/EQA), but does need to
+        // export a student's full portfolio.
+        //
+        // companycourseeditor's own IOMAD archetype is its own custom
+        // name ('companycourseeditor', not a core one - see the IOMAD
+        // architecture guide's Section 1.7 "custom archetypes are a
+        // trap"), so it inherits NOTHING from the db/access.php
+        // archetypes arrays by Moodle's own default computation on an
+        // EXISTING install - that computation only runs once, at the
+        // moment a capability is first registered, which for :viewall
+        // and :exportportfolio was long before this role existed on
+        // this site. The db/access.php declaration alone only benefits
+        // a genuinely brand-new install; this explicit grant is what
+        // actually fixes it here, same mechanism already used for
+        // Assessor/IQA/EQA above and for block_exacomp's own
+        // companycourseeditor capability grant.
+        //
+        // Confirmed live: without this step, Priya Shaw (Bridgeport's
+        // own companycourseeditor) could not see her own company's
+        // course in the matrix at all.
+        $companycourseeditorrole = $DB->get_record('role', ['shortname' => 'companycourseeditor']);
+        if ($companycourseeditorrole) {
+            $syscontext = \context_system::instance();
+            assign_capability('block/nvq_matrix:viewall', CAP_ALLOW, $companycourseeditorrole->id, $syscontext->id, true);
+            assign_capability('block/nvq_matrix:exportportfolio', CAP_ALLOW, $companycourseeditorrole->id, $syscontext->id, true);
+            accesslib_clear_all_caches(false);
+        }
+
+        upgrade_block_savepoint(true, 2026091705, 'nvq_matrix');
+    }
     return true;
 }

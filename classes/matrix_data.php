@@ -1336,6 +1336,37 @@ class matrix_data {
      * @return bool True if the user is group-restricted on this course
      *              (i.e. this plugin's own queries must filter for them).
      */
+    /**
+     * Whether $userid holds a role at $context whose underlying Moodle
+     * archetype is 'student' - i.e. genuinely a learner, not merely
+     * someone who happens to lack :viewall. Needed because a non-learner
+     * "reviewer" role (e.g. companycoursenoneditor, which IOMAD auto-
+     * assigns to a Company Manager reviewing a shared course before
+     * deciding whether to roll it out to their own staff - see the
+     * IOMAD architecture guide's role table) also lacks :viewall on
+     * this site, since its own custom archetype ('companycoursenon
+     * editor', not a core one - see that guide's Section 1.7 "custom
+     * archetypes are a trap") was never granted any nvq_matrix
+     * capability at all. A bare "!has :viewall" test alone therefore
+     * incorrectly buckets that reviewer in as a "student" in the
+     * matrix's picker. Confirmed live on cliffordtraining.com,
+     * 2026-09-17: a Company Manager auto-enrolled this way appeared in
+     * the student list they should never be in.
+     *
+     * @param \context $context
+     * @param int $userid
+     * @return bool
+     */
+    public static function has_student_archetype_role(\context $context, int $userid): bool {
+        $roles = get_user_roles($context, $userid, true);
+        foreach ($roles as $role) {
+            if ($role->archetype === 'student') {
+                return true;
+            }
+        }
+        return false;
+    }
+
     public static function is_group_restricted(int $courseid, ?int $userid = null): bool {
         global $USER, $DB;
         $userid = $userid ?? (int) $USER->id;
