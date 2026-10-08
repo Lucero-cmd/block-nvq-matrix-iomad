@@ -1179,5 +1179,262 @@ function xmldb_block_nvq_matrix_upgrade(int $oldversion): bool {
 
         upgrade_block_savepoint(true, 2026091705, 'nvq_matrix');
     }
+
+    if ($oldversion < 2026100500) {
+        // No schema/capability change - release-string/version bump
+        // only. Fixes the assessor notification task's eligibility
+        // filter after an Exabis ePortfolio update changed how
+        // learner-made evidence links are recorded - see version.php's
+        // v26.6.26 entry for the full explanation.
+
+        // Nvq_matrix savepoint reached.
+        upgrade_block_savepoint(true, 2026100500, 'nvq_matrix');
+    }
+    if ($oldversion < 2026100501) {
+        // No schema/capability change - release-string/version bump
+        // only. Assessor notifications now go to everyone holding the
+        // Assessor role in the course, falling back to the designated
+        // assessor - see version.php's v26.6.27 entry.
+
+        // Nvq_matrix savepoint reached.
+        upgrade_block_savepoint(true, 2026100501, 'nvq_matrix');
+    }
+
+    if ($oldversion < 2026100502) {
+        // Withdrawn status (v26.6.28) - see version.php for the full
+        // explanation.
+
+        // 1. New append-only table, identical to its definition in
+        // db/install.xml.
+        $table = new xmldb_table('block_nvq_matrix_withdrawals');
+        if (!$dbman->table_exists($table)) {
+            $table->add_field('id', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, XMLDB_SEQUENCE, null);
+            $table->add_field('studentid', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, null);
+            $table->add_field('courseid', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, null);
+            $table->add_field('action', XMLDB_TYPE_INTEGER, '1', null, XMLDB_NOTNULL, null, null);
+            $table->add_field('actiondate', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, null);
+            $table->add_field('actionby', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, null);
+            $table->add_field('timecreated', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, null);
+            $table->add_key('primary', XMLDB_KEY_PRIMARY, ['id']);
+            $table->add_key('studentid', XMLDB_KEY_FOREIGN, ['studentid'], 'user', ['id']);
+            $table->add_key('courseid', XMLDB_KEY_FOREIGN, ['courseid'], 'course', ['id']);
+            $table->add_key('actionby', XMLDB_KEY_FOREIGN, ['actionby'], 'user', ['id']);
+            $table->add_index('studentid-courseid', XMLDB_INDEX_NOTUNIQUE, ['studentid', 'courseid']);
+            $dbman->create_table($table);
+        }
+
+        // 2. The new block/nvq_matrix:withdraw capability is only
+        // registered by update_capabilities(), which Moodle otherwise
+        // runs AFTER this whole upgrade function returns - so it must be
+        // called explicitly here before assign_capability() can use it
+        // (same lesson learned the hard way in the 2026091703 step
+        // above, when this plugin's deploy jumped many versions in one
+        // run).
+        update_capabilities('block_nvq_matrix');
+
+        // 3. Grant :withdraw to the custom IQA role (client decision
+        // 2026-10-05: admin, Assessor and IQA). Assessor and managers
+        // already get it from the archetype defaults in db/access.php.
+        // Also records IQA's :finalstatus permission here, which was
+        // granted directly through Define roles on production only
+        // (2026-09) - this makes staging and production match and puts
+        // that decision in the plugin's own history. Safe to re-apply on
+        // production, where it is already ALLOW. Looked up by shortname,
+        // skipped if the role does not exist on this install.
+        $syscontext = \context_system::instance();
+        $iqarole = $DB->get_record('role', ['shortname' => 'iqa']);
+        if ($iqarole) {
+            assign_capability('block/nvq_matrix:withdraw', CAP_ALLOW, $iqarole->id, $syscontext->id, true);
+            assign_capability('block/nvq_matrix:finalstatus', CAP_ALLOW, $iqarole->id, $syscontext->id, true);
+        }
+
+        // 4. IOMAD fork addition, not part of the upstream plain-Moodle
+        // release: grant :withdraw to BOTH course roles a Company Manager
+        // holds (client decision, 2026-10-08 - confirmed live that Company
+        // Managers hold companycourseeditor on their own company's courses
+        // and companycoursenoneditor on shared courses, the IOMAD sharing
+        // flow's default). A Company Manager must be able to mark their
+        // own learner Withdrawn (freeing the seat) on either kind of
+        // course without asking an admin, since withdrawal is the provider
+        // informing the platform of something, unlike Pass/Fail which
+        // stays an Assessor/IQA/admin judgement. Both roles' IOMAD
+        // archetypes are their own custom names, so they inherit nothing
+        // from db/access.php's archetype defaults on an existing install -
+        // same mechanism already used for companycourseeditor's
+        // :viewall/:exportportfolio grant above. withdraw.php's group
+        // check still confines either role to its own company's learners.
+        // Deliberate exception to the isolation guide's "companycoursenon
+        // editor stays view-only" default, explicitly decided.
+        foreach (['companycourseeditor', 'companycoursenoneditor'] as $companyroleshortname) {
+            $companyrole = $DB->get_record('role', ['shortname' => $companyroleshortname]);
+            if ($companyrole) {
+                assign_capability('block/nvq_matrix:withdraw', CAP_ALLOW, $companyrole->id, $syscontext->id, true);
+            }
+        }
+        // companycoursenoneditor also needs :viewall, read-only, or it can
+        // never open a learner's matrix and the Withdraw box above is
+        // unreachable (companycourseeditor already has it, 2026091700).
+        // Reverses v27.0.4's "no nvq_matrix capability at all" for this
+        // role, by explicit client decision (2026-10-08). Checked live
+        // first: this role has no moodle/site:accessallgroups, and on the
+        // shared course (forced SEPARATEGROUPS) each Company Manager sits
+        // only in their own company's group, so the matrix's group
+        // isolation confines them to their own company's learners.
+        $ccnerole = $DB->get_record('role', ['shortname' => 'companycoursenoneditor']);
+        if ($ccnerole) {
+            assign_capability('block/nvq_matrix:viewall', CAP_ALLOW, $ccnerole->id, $syscontext->id, true);
+        }
+
+        accesslib_clear_all_caches(false);
+
+        // Nvq_matrix savepoint reached.
+        upgrade_block_savepoint(true, 2026100502, 'nvq_matrix');
+    }
+
+    if ($oldversion < 2026100503) {
+        // v26.6.29: Withdrawn controls moved into Edit matrix mode beside
+        // Final status. Template/CSS/lang only - no schema change.
+        upgrade_block_savepoint(true, 2026100503, 'nvq_matrix');
+    }
+
+    if ($oldversion < 2026100504) {
+        // v26.6.30: history for evidence comments - new append-only
+        // table, identical to its definition in db/install.xml. Only
+        // changes made from now on are recorded; earlier overwrites were
+        // never kept, so there is nothing to backfill.
+        $table = new xmldb_table('block_nvq_matrix_evcomments_history');
+        if (!$dbman->table_exists($table)) {
+            $table->add_field('id', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, XMLDB_SEQUENCE, null);
+            $table->add_field('liverowid', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, null);
+            $table->add_field('studentid', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, null);
+            $table->add_field('mmid', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, null);
+            $table->add_field('itemid', XMLDB_TYPE_INTEGER, '10', null, null, null, null);
+            $table->add_field('comment', XMLDB_TYPE_TEXT, null, null, null, null, null);
+            $table->add_field('commentedby', XMLDB_TYPE_INTEGER, '10', null, null, null, null);
+            $table->add_field('timemodified', XMLDB_TYPE_INTEGER, '10', null, null, null, null);
+            $table->add_field('archivedtime', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, null);
+            $table->add_key('primary', XMLDB_KEY_PRIMARY, ['id']);
+            $table->add_key('studentid', XMLDB_KEY_FOREIGN, ['studentid'], 'user', ['id']);
+            $table->add_key('commentedby', XMLDB_KEY_FOREIGN, ['commentedby'], 'user', ['id']);
+            $table->add_index('liverowid', XMLDB_INDEX_NOTUNIQUE, ['liverowid']);
+            $table->add_index('studentid-mmid', XMLDB_INDEX_NOTUNIQUE, ['studentid', 'mmid']);
+            $dbman->create_table($table);
+        }
+
+        upgrade_block_savepoint(true, 2026100504, 'nvq_matrix');
+    }
+
+    if ($oldversion < 2026100505) {
+        // v26.7.1: Quality Assurance documents - four new tables
+        // (identical to db/install.xml) and the :qareview capability.
+        $tables = [];
+
+        $t = new xmldb_table('block_nvq_matrix_qadocs');
+        $t->add_field('id', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, XMLDB_SEQUENCE, null);
+        $t->add_field('title', XMLDB_TYPE_CHAR, '255', null, XMLDB_NOTNULL, null, null);
+        $t->add_field('description', XMLDB_TYPE_TEXT, null, null, null, null, null);
+        $t->add_field('doctype', XMLDB_TYPE_INTEGER, '1', null, XMLDB_NOTNULL, null, '0');
+        $t->add_field('needscounter', XMLDB_TYPE_INTEGER, '1', null, XMLDB_NOTNULL, null, '0');
+        $t->add_field('enabled', XMLDB_TYPE_INTEGER, '1', null, XMLDB_NOTNULL, null, '1');
+        $t->add_field('sortorder', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, '0');
+        $t->add_field('createdby', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, '0');
+        $t->add_field('timecreated', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, '0');
+        $t->add_field('timemodified', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, '0');
+        $t->add_key('primary', XMLDB_KEY_PRIMARY, ['id']);
+        $tables[] = $t;
+
+        $t = new xmldb_table('block_nvq_matrix_qadoccourses');
+        $t->add_field('id', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, XMLDB_SEQUENCE, null);
+        $t->add_field('docid', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, null);
+        $t->add_field('courseid', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, null);
+        $t->add_key('primary', XMLDB_KEY_PRIMARY, ['id']);
+        $t->add_key('docid', XMLDB_KEY_FOREIGN, ['docid'], 'block_nvq_matrix_qadocs', ['id']);
+        $t->add_key('courseid', XMLDB_KEY_FOREIGN, ['courseid'], 'course', ['id']);
+        $t->add_index('docid-courseid', XMLDB_INDEX_UNIQUE, ['docid', 'courseid']);
+        $tables[] = $t;
+
+        $t = new xmldb_table('block_nvq_matrix_qasubs');
+        $t->add_field('id', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, XMLDB_SEQUENCE, null);
+        $t->add_field('docid', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, null);
+        $t->add_field('courseid', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, null);
+        $t->add_field('userid', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, null);
+        $t->add_field('status', XMLDB_TYPE_INTEGER, '1', null, XMLDB_NOTNULL, null, '1');
+        $t->add_field('returnreason', XMLDB_TYPE_TEXT, null, null, null, null, null);
+        $t->add_field('reviewedby', XMLDB_TYPE_INTEGER, '10', null, null, null, null);
+        $t->add_field('reviewedtime', XMLDB_TYPE_INTEGER, '10', null, null, null, null);
+        $t->add_field('timecreated', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, '0');
+        $t->add_field('timemodified', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, '0');
+        $t->add_key('primary', XMLDB_KEY_PRIMARY, ['id']);
+        $t->add_key('docid', XMLDB_KEY_FOREIGN, ['docid'], 'block_nvq_matrix_qadocs', ['id']);
+        $t->add_key('courseid', XMLDB_KEY_FOREIGN, ['courseid'], 'course', ['id']);
+        $t->add_key('userid', XMLDB_KEY_FOREIGN, ['userid'], 'user', ['id']);
+        $t->add_key('reviewedby', XMLDB_KEY_FOREIGN, ['reviewedby'], 'user', ['id']);
+        $t->add_index('docid-courseid-userid', XMLDB_INDEX_UNIQUE, ['docid', 'courseid', 'userid']);
+        $t->add_index('courseid-status', XMLDB_INDEX_NOTUNIQUE, ['courseid', 'status']);
+        $tables[] = $t;
+
+        $t = new xmldb_table('block_nvq_matrix_qalog');
+        $t->add_field('id', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, XMLDB_SEQUENCE, null);
+        $t->add_field('subid', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, null);
+        $t->add_field('docid', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, null);
+        $t->add_field('courseid', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, null);
+        $t->add_field('userid', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, null);
+        $t->add_field('action', XMLDB_TYPE_CHAR, '20', null, XMLDB_NOTNULL, null, null);
+        $t->add_field('actionby', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, null);
+        $t->add_field('note', XMLDB_TYPE_TEXT, null, null, null, null, null);
+        $t->add_field('timecreated', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, '0');
+        $t->add_key('primary', XMLDB_KEY_PRIMARY, ['id']);
+        $t->add_key('userid', XMLDB_KEY_FOREIGN, ['userid'], 'user', ['id']);
+        $t->add_key('actionby', XMLDB_KEY_FOREIGN, ['actionby'], 'user', ['id']);
+        $t->add_index('subid', XMLDB_INDEX_NOTUNIQUE, ['subid']);
+        $t->add_index('courseid-userid', XMLDB_INDEX_NOTUNIQUE, ['courseid', 'userid']);
+        $tables[] = $t;
+
+        foreach ($tables as $table) {
+            if (!$dbman->table_exists($table)) {
+                $dbman->create_table($table);
+            }
+        }
+
+        // The new block/nvq_matrix:qareview capability must be registered
+        // explicitly before assign_capability() can use it (same lesson
+        // as the 2026100502 step). Assessor (editingteacher archetype)
+        // and managers get it from db/access.php; the custom IQA role
+        // (teacher archetype) is granted it here. EQA and Company
+        // Manager deliberately do not get it - they are view-only, and
+        // their read access to the QA pages is gated on :viewall, the
+        // same capability that already governs the matrix dashboard for
+        // them (see qa.php/qa_admin.php, not a capability change here).
+        update_capabilities('block_nvq_matrix');
+        $iqarole = $DB->get_record('role', ['shortname' => 'iqa']);
+        if ($iqarole) {
+            assign_capability('block/nvq_matrix:qareview', CAP_ALLOW, $iqarole->id, \context_system::instance()->id, true);
+        }
+        accesslib_clear_all_caches(false);
+
+        upgrade_block_savepoint(true, 2026100505, 'nvq_matrix');
+    }
+
+    if ($oldversion < 2026100506) {
+        // v26.7.2: a document can need the IQA signature as well as the
+        // Assessor's (the Statement of authenticity), so qadocs gains
+        // needsiqa, and the new block/nvq_matrix:qaiqasign capability
+        // says who may give that last signature (managers and the IQA
+        // role; Assessors cannot).
+        $table = new xmldb_table('block_nvq_matrix_qadocs');
+        $field = new xmldb_field('needsiqa', XMLDB_TYPE_INTEGER, '1', null, XMLDB_NOTNULL, null, '0', 'needscounter');
+        if (!$dbman->field_exists($table, $field)) {
+            $dbman->add_field($table, $field);
+        }
+        update_capabilities('block_nvq_matrix');
+        $iqarole = $DB->get_record('role', ['shortname' => 'iqa']);
+        if ($iqarole) {
+            assign_capability('block/nvq_matrix:qaiqasign', CAP_ALLOW, $iqarole->id, \context_system::instance()->id, true);
+        }
+        accesslib_clear_all_caches(false);
+
+        upgrade_block_savepoint(true, 2026100506, 'nvq_matrix');
+    }
+
     return true;
 }

@@ -120,6 +120,33 @@ $capabilities = [
             'manager'        => CAP_ALLOW,
         ],
     ],
+    // Capability to mark a learner as withdrawn from a course, or
+    // reinstate them (v26.6.28). Its own capability rather than reusing
+    // :finalstatus, since withdrawal is an enrolment-state decision, not
+    // an assessment outcome - withdrawing/reinstating never touches a
+    // recorded Pass/Fail. Client decision (2026-10-05): admin, Assessor
+    // and IQA. Assessor and site managers get it from these archetype
+    // defaults; the custom 'iqa' role (teacher archetype) is granted it
+    // specifically by db/upgrade.php's 2026100502 step, so the standard
+    // Moodle 'teacher' role and 'eqa' are unaffected.
+    // companycourseeditor (Client Course Editor) and companycoursenoneditor
+    // (Client Course Access), IOMAD fork: both also granted this
+    // capability by the same upgrade step (client decision 2026-10-08).
+    // These are the two course roles a Company Manager holds - editor on
+    // their own company's courses, non-editor on shared courses (IOMAD's
+    // sharing-flow default) - and withdrawal is something the provider
+    // itself informs the platform of (freeing the seat), unlike Pass/Fail
+    // which stays an Assessor/IQA/admin judgement, so it must work on
+    // both without an admin stepping in. withdraw.php's group check still
+    // confines either role to its own company's learners.
+    'block/nvq_matrix:withdraw' => [
+        'captype'      => 'write',
+        'contextlevel' => CONTEXT_COURSE,
+        'archetypes'   => [
+            'editingteacher' => CAP_ALLOW,
+            'manager'        => CAP_ALLOW,
+        ],
+    ],
     // Capability to export a single student's full portfolio (matrix
     // overview + evidence files + Assessment Plan/Sampling summary) as a
     // zip. Deliberately teacher-only, per client decision - unlike every
@@ -172,6 +199,35 @@ $capabilities = [
         'archetypes'   => [
             'editingteacher' => CAP_ALLOW,
             'manager'        => CAP_ALLOW,
+        ],
+    ],
+    // Capability to accept or return a learner's Quality Assurance
+    // document upload and to upload the countersigned copy (v26.7.1).
+    // Client decision: admin, Assessor and IQA. Assessor (editingteacher
+    // archetype) and managers get it from these defaults; the custom IQA
+    // role is granted it by db/upgrade.php's 2026100801 step. EQA and
+    // Company Manager are view-only on the QA pages (same rule as the
+    // matrix itself) and never receive this - their read access to the
+    // QA pages is gated on :viewall, same as the matrix dashboard, not
+    // on this capability.
+    'block/nvq_matrix:qareview' => [
+        'captype'      => 'write',
+        'contextlevel' => CONTEXT_COURSE,
+        'archetypes'   => [
+            'editingteacher' => CAP_ALLOW,
+            'manager'        => CAP_ALLOW,
+        ],
+    ],
+    // v26.7.2: the IQA signature on documents that need one (the
+    // Statement of authenticity). Managers get it here; the custom IQA
+    // role is granted it by db/upgrade.php's 2026100801 step. Assessors
+    // do not hold this - the Assessor signs via :qareview and the flow
+    // then waits for whoever holds :qaiqasign.
+    'block/nvq_matrix:qaiqasign' => [
+        'captype'      => 'write',
+        'contextlevel' => CONTEXT_COURSE,
+        'archetypes'   => [
+            'manager' => CAP_ALLOW,
         ],
     ],
     'block/nvq_matrix:exportportfolio' => [

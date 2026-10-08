@@ -107,6 +107,16 @@ if (!$coursecontext
     die();
 }
 
+// Withdrawn lock (v26.6.28): a learner marked withdrawn from this course
+// has their matrix locked for everyone until reinstated - enforced here,
+// not just by hiding the controls in the page.
+if (\block_nvq_matrix\matrix_data::is_withdrawn($studentid, $courseid)) {
+    http_response_code(403);
+    $response['error'] = get_string('withdrawnlocked', 'block_nvq_matrix');
+    echo json_encode($response);
+    die();
+}
+
 // ----------------------------------------------------------------
 // Save.
 // ----------------------------------------------------------------

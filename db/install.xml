@@ -199,8 +199,8 @@
         <KEY NAME="courseid" TYPE="foreign" FIELDS="courseid" REFTABLE="course" REFFIELDS="id"/>
       </KEYS>
       <INDEXES>
-        <INDEX NAME="liverowid" FIELDS="liverowid" COMMENT="Every past snapshot for one live grade row, in insertion order - the standard lookup for displaying a unit's full grading history."/>
-        <INDEX NAME="studentid-topicid-courseid" FIELDS="studentid, topicid, courseid" COMMENT="Non-unique, unlike the live table's own index - many historical rows are expected per student/unit/course over time."/>
+        <INDEX NAME="liverowid" UNIQUE="false" FIELDS="liverowid" COMMENT="Every past snapshot for one live grade row, in insertion order - the standard lookup for displaying a unit's full grading history."/>
+        <INDEX NAME="studentid-topicid-courseid" UNIQUE="false" FIELDS="studentid, topicid, courseid" COMMENT="Non-unique, unlike the live table's own index - many historical rows are expected per student/unit/course over time."/>
       </INDEXES>
     </TABLE>
     <TABLE NAME="block_nvq_matrix_sampling_history" COMMENT="Audit trail for block_nvq_matrix_sampling - see block_nvq_matrix_grades_history's comment for the full design rationale, identical here.">
@@ -222,8 +222,8 @@
         <KEY NAME="courseid" TYPE="foreign" FIELDS="courseid" REFTABLE="course" REFFIELDS="id"/>
       </KEYS>
       <INDEXES>
-        <INDEX NAME="liverowid" FIELDS="liverowid"/>
-        <INDEX NAME="studentid-topicid-courseid" FIELDS="studentid, topicid, courseid"/>
+        <INDEX NAME="liverowid" UNIQUE="false" FIELDS="liverowid"/>
+        <INDEX NAME="studentid-topicid-courseid" UNIQUE="false" FIELDS="studentid, topicid, courseid"/>
       </INDEXES>
     </TABLE>
     <TABLE NAME="block_nvq_matrix_unit_comments_history" COMMENT="Audit trail for block_nvq_matrix_unit_comments - see block_nvq_matrix_grades_history's comment for the full design rationale, identical here. Both the assessor comment and IQA comment are snapshotted together as one row, mirroring the live table's own single-row-holds-both structure.">
@@ -249,8 +249,8 @@
         <KEY NAME="courseid" TYPE="foreign" FIELDS="courseid" REFTABLE="course" REFFIELDS="id"/>
       </KEYS>
       <INDEXES>
-        <INDEX NAME="liverowid" FIELDS="liverowid"/>
-        <INDEX NAME="studentid-topicid-courseid" FIELDS="studentid, topicid, courseid"/>
+        <INDEX NAME="liverowid" UNIQUE="false" FIELDS="liverowid"/>
+        <INDEX NAME="studentid-topicid-courseid" UNIQUE="false" FIELDS="studentid, topicid, courseid"/>
       </INDEXES>
     </TABLE>
     <TABLE NAME="block_nvq_matrix_status_history" COMMENT="Audit trail for block_nvq_matrix_status - see block_nvq_matrix_grades_history's comment for the full design rationale, identical here. notifiedtime/notifiedby are snapshotted too, so a history row also preserves whether/when a completion notification had been sent as of that point, even though notify actions don't go through save_final_status() directly (see matrix_data::send_completion_notification(), which updates the live row's notifiedtime/notifiedby without changing status - a snapshot is still taken here since the live row as a whole changed).">
@@ -274,8 +274,130 @@
         <KEY NAME="courseid" TYPE="foreign" FIELDS="courseid" REFTABLE="course" REFFIELDS="id"/>
       </KEYS>
       <INDEXES>
-        <INDEX NAME="liverowid" FIELDS="liverowid"/>
-        <INDEX NAME="studentid-courseid" FIELDS="studentid, courseid"/>
+        <INDEX NAME="liverowid" UNIQUE="false" FIELDS="liverowid"/>
+        <INDEX NAME="studentid-courseid" UNIQUE="false" FIELDS="studentid, courseid"/>
+      </INDEXES>
+    </TABLE>
+    <TABLE NAME="block_nvq_matrix_evcomments_history" COMMENT="Audit trail for block_nvq_matrix_evidence_comments (v26.6.30) - a snapshot of the OLD comment, inserted immediately before it is overwritten or cleared in matrix_data::save_evidence_comment(), and before delete_archived.php removes it. Same design as block_nvq_matrix_grades_history. Only non-empty comments are snapshotted. Like the live table it has no courseid - the course is resolved through mmid.">
+      <FIELDS>
+        <FIELD NAME="id" TYPE="int" LENGTH="10" NOTNULL="true" SEQUENCE="true"/>
+        <FIELD NAME="liverowid" TYPE="int" LENGTH="10" NOTNULL="true" SEQUENCE="false" COMMENT="block_nvq_matrix_evidence_comments.id this snapshot belonged to."/>
+        <FIELD NAME="studentid" TYPE="int" LENGTH="10" NOTNULL="true" SEQUENCE="false" COMMENT="Owner of the evidence item."/>
+        <FIELD NAME="mmid" TYPE="int" LENGTH="10" NOTNULL="true" SEQUENCE="false" COMMENT="block_exacompcompuser_mm row id - the item-to-criterion link the comment belonged to."/>
+        <FIELD NAME="itemid" TYPE="int" LENGTH="10" NOTNULL="false" SEQUENCE="false" COMMENT="Exaport item id, for showing the evidence name."/>
+        <FIELD NAME="comment" TYPE="text" NOTNULL="false" SEQUENCE="false" COMMENT="The comment as it stood before this change."/>
+        <FIELD NAME="commentedby" TYPE="int" LENGTH="10" NOTNULL="false" SEQUENCE="false"/>
+        <FIELD NAME="timemodified" TYPE="int" LENGTH="10" NOTNULL="false" SEQUENCE="false" COMMENT="When this (now historical) comment was originally written."/>
+        <FIELD NAME="archivedtime" TYPE="int" LENGTH="10" NOTNULL="true" SEQUENCE="false" COMMENT="When this comment stopped being current."/>
+      </FIELDS>
+      <KEYS>
+        <KEY NAME="primary" TYPE="primary" FIELDS="id"/>
+        <KEY NAME="studentid" TYPE="foreign" FIELDS="studentid" REFTABLE="user" REFFIELDS="id"/>
+        <KEY NAME="commentedby" TYPE="foreign" FIELDS="commentedby" REFTABLE="user" REFFIELDS="id"/>
+      </KEYS>
+      <INDEXES>
+        <INDEX NAME="liverowid" UNIQUE="false" FIELDS="liverowid"/>
+        <INDEX NAME="studentid-mmid" UNIQUE="false" FIELDS="studentid, mmid"/>
+      </INDEXES>
+    </TABLE>
+    <TABLE NAME="block_nvq_matrix_withdrawals" COMMENT="Append-only log of a learner being marked withdrawn from, or reinstated to, a course (v26.6.28). The newest row (highest id) per student+course is the learner's current state - withdrawn if its action is 1, active if 0 or if there is no row at all. Rows are never updated or deleted in normal use, so this table is its own audit trail. Deliberately separate from block_nvq_matrix_status: withdrawal is about whether the learner is still on the programme, not an assessment outcome, so withdrawing never touches a recorded Pass/Fail and reinstating restores the learner exactly as they were. Separate from Moodle enrolment too - a withdrawn learner stays enrolled.">
+      <FIELDS>
+        <FIELD NAME="id" TYPE="int" LENGTH="10" NOTNULL="true" SEQUENCE="true"/>
+        <FIELD NAME="studentid" TYPE="int" LENGTH="10" NOTNULL="true" SEQUENCE="false" COMMENT="The learner this entry is about."/>
+        <FIELD NAME="courseid" TYPE="int" LENGTH="10" NOTNULL="true" SEQUENCE="false" COMMENT="The course the learner was withdrawn from or reinstated to."/>
+        <FIELD NAME="action" TYPE="int" LENGTH="1" NOTNULL="true" SEQUENCE="false" COMMENT="1 = withdrawn, 0 = reinstated."/>
+        <FIELD NAME="actiondate" TYPE="int" LENGTH="10" NOTNULL="true" SEQUENCE="false" COMMENT="The date entered for this action (or the time of saving if none was entered) - follows the plugin's flat backdating rule."/>
+        <FIELD NAME="actionby" TYPE="int" LENGTH="10" NOTNULL="true" SEQUENCE="false" COMMENT="The staff member who recorded this action."/>
+        <FIELD NAME="timecreated" TYPE="int" LENGTH="10" NOTNULL="true" SEQUENCE="false" COMMENT="When this row was actually saved - never displayed, kept for integrity only."/>
+      </FIELDS>
+      <KEYS>
+        <KEY NAME="primary" TYPE="primary" FIELDS="id"/>
+        <KEY NAME="studentid" TYPE="foreign" FIELDS="studentid" REFTABLE="user" REFFIELDS="id"/>
+        <KEY NAME="courseid" TYPE="foreign" FIELDS="courseid" REFTABLE="course" REFFIELDS="id"/>
+        <KEY NAME="actionby" TYPE="foreign" FIELDS="actionby" REFTABLE="user" REFFIELDS="id"/>
+      </KEYS>
+      <INDEXES>
+        <INDEX NAME="studentid-courseid" UNIQUE="false" FIELDS="studentid, courseid"/>
+      </INDEXES>
+    </TABLE>
+    <TABLE NAME="block_nvq_matrix_qadocs" COMMENT="Quality Assurance documents (v26.7.1) - the site-wide list managed by an administrator on the QA documents admin page. Each row is one document (title, type, whether staff must countersign). The master file itself lives in Moodle's file storage (component block_nvq_matrix, filearea qa_master, itemid = this id, system context) and is served only through qa_file.php, which checks access. Which courses a document applies to is held in block_nvq_matrix_qadoccourses, so a document used by ProQual courses can be kept off Pearson Edexcel courses.">
+      <FIELDS>
+        <FIELD NAME="id" TYPE="int" LENGTH="10" NOTNULL="true" SEQUENCE="true"/>
+        <FIELD NAME="title" TYPE="char" LENGTH="255" NOTNULL="true" SEQUENCE="false" COMMENT="Display title."/>
+        <FIELD NAME="description" TYPE="text" NOTNULL="false" SEQUENCE="false" COMMENT="Optional short guidance shown on the document card."/>
+        <FIELD NAME="doctype" TYPE="int" LENGTH="1" NOTNULL="true" DEFAULT="0" SEQUENCE="false" COMMENT="0 = Read (opened in the browser, nothing returned), 1 = Sign and return (downloaded, signed, uploaded back by the learner)."/>
+        <FIELD NAME="needscounter" TYPE="int" LENGTH="1" NOTNULL="true" DEFAULT="0" SEQUENCE="false" COMMENT="1 = staff must upload a countersigned copy (the For Centre use block) when accepting. Only meaningful for Sign and return documents."/>
+        <FIELD NAME="needsiqa" TYPE="int" LENGTH="1" NOTNULL="true" DEFAULT="0" SEQUENCE="false" COMMENT="1 = after the Assessor has signed, the IQA must also sign and upload the final copy before the document is accepted (v26.7.2). Implies needscounter = 1."/>
+        <FIELD NAME="enabled" TYPE="int" LENGTH="1" NOTNULL="true" DEFAULT="1" SEQUENCE="false" COMMENT="0 hides the document from every course without deleting it or its submissions."/>
+        <FIELD NAME="sortorder" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false"/>
+        <FIELD NAME="createdby" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false"/>
+        <FIELD NAME="timecreated" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false"/>
+        <FIELD NAME="timemodified" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false"/>
+      </FIELDS>
+      <KEYS>
+        <KEY NAME="primary" TYPE="primary" FIELDS="id"/>
+      </KEYS>
+    </TABLE>
+    <TABLE NAME="block_nvq_matrix_qadoccourses" COMMENT="Which courses each QA document applies to (v26.7.1). One row per document and course.">
+      <FIELDS>
+        <FIELD NAME="id" TYPE="int" LENGTH="10" NOTNULL="true" SEQUENCE="true"/>
+        <FIELD NAME="docid" TYPE="int" LENGTH="10" NOTNULL="true" SEQUENCE="false"/>
+        <FIELD NAME="courseid" TYPE="int" LENGTH="10" NOTNULL="true" SEQUENCE="false"/>
+      </FIELDS>
+      <KEYS>
+        <KEY NAME="primary" TYPE="primary" FIELDS="id"/>
+        <KEY NAME="docid" TYPE="foreign" FIELDS="docid" REFTABLE="block_nvq_matrix_qadocs" REFFIELDS="id"/>
+        <KEY NAME="courseid" TYPE="foreign" FIELDS="courseid" REFTABLE="course" REFFIELDS="id"/>
+      </KEYS>
+      <INDEXES>
+        <INDEX NAME="docid-courseid" UNIQUE="true" FIELDS="docid, courseid"/>
+      </INDEXES>
+    </TABLE>
+    <TABLE NAME="block_nvq_matrix_qasubs" COMMENT="One learner's response to one Sign and return QA document in one course (v26.7.1). status: 1 = awaiting check, 2 = accepted, 3 = returned, 4 = awaiting the IQA signature; no row means not uploaded. The learner's files (filearea qa_learner) and the staff countersigned files (filearea qa_countersigned) and the IQA-signed final copy (filearea qa_iqasigned) are stored in the course context with itemid = this id. Times are stored for integrity but are deliberately never displayed (client decision).">
+      <FIELDS>
+        <FIELD NAME="id" TYPE="int" LENGTH="10" NOTNULL="true" SEQUENCE="true"/>
+        <FIELD NAME="docid" TYPE="int" LENGTH="10" NOTNULL="true" SEQUENCE="false"/>
+        <FIELD NAME="courseid" TYPE="int" LENGTH="10" NOTNULL="true" SEQUENCE="false"/>
+        <FIELD NAME="userid" TYPE="int" LENGTH="10" NOTNULL="true" SEQUENCE="false" COMMENT="The learner."/>
+        <FIELD NAME="status" TYPE="int" LENGTH="1" NOTNULL="true" DEFAULT="1" SEQUENCE="false"/>
+        <FIELD NAME="returnreason" TYPE="text" NOTNULL="false" SEQUENCE="false" COMMENT="Why staff returned the upload."/>
+        <FIELD NAME="reviewedby" TYPE="int" LENGTH="10" NOTNULL="false" SEQUENCE="false" COMMENT="Staff member who last accepted or returned."/>
+        <FIELD NAME="reviewedtime" TYPE="int" LENGTH="10" NOTNULL="false" SEQUENCE="false"/>
+        <FIELD NAME="timecreated" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false"/>
+        <FIELD NAME="timemodified" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false"/>
+      </FIELDS>
+      <KEYS>
+        <KEY NAME="primary" TYPE="primary" FIELDS="id"/>
+        <KEY NAME="docid" TYPE="foreign" FIELDS="docid" REFTABLE="block_nvq_matrix_qadocs" REFFIELDS="id"/>
+        <KEY NAME="courseid" TYPE="foreign" FIELDS="courseid" REFTABLE="course" REFFIELDS="id"/>
+        <KEY NAME="userid" TYPE="foreign" FIELDS="userid" REFTABLE="user" REFFIELDS="id"/>
+        <KEY NAME="reviewedby" TYPE="foreign" FIELDS="reviewedby" REFTABLE="user" REFFIELDS="id"/>
+      </KEYS>
+      <INDEXES>
+        <INDEX NAME="docid-courseid-userid" UNIQUE="true" FIELDS="docid, courseid, userid"/>
+        <INDEX NAME="courseid-status" UNIQUE="false" FIELDS="courseid, status"/>
+      </INDEXES>
+    </TABLE>
+    <TABLE NAME="block_nvq_matrix_qalog" COMMENT="Append-only audit trail for QA documents (v26.7.1): every upload, replacement, acceptance and return. Times are stored but never displayed.">
+      <FIELDS>
+        <FIELD NAME="id" TYPE="int" LENGTH="10" NOTNULL="true" SEQUENCE="true"/>
+        <FIELD NAME="subid" TYPE="int" LENGTH="10" NOTNULL="true" SEQUENCE="false"/>
+        <FIELD NAME="docid" TYPE="int" LENGTH="10" NOTNULL="true" SEQUENCE="false"/>
+        <FIELD NAME="courseid" TYPE="int" LENGTH="10" NOTNULL="true" SEQUENCE="false"/>
+        <FIELD NAME="userid" TYPE="int" LENGTH="10" NOTNULL="true" SEQUENCE="false" COMMENT="The learner the entry is about."/>
+        <FIELD NAME="action" TYPE="char" LENGTH="20" NOTNULL="true" SEQUENCE="false" COMMENT="upload, reupload, accept or return."/>
+        <FIELD NAME="actionby" TYPE="int" LENGTH="10" NOTNULL="true" SEQUENCE="false"/>
+        <FIELD NAME="note" TYPE="text" NOTNULL="false" SEQUENCE="false" COMMENT="File names, or the return reason."/>
+        <FIELD NAME="timecreated" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false"/>
+      </FIELDS>
+      <KEYS>
+        <KEY NAME="primary" TYPE="primary" FIELDS="id"/>
+        <KEY NAME="userid" TYPE="foreign" FIELDS="userid" REFTABLE="user" REFFIELDS="id"/>
+        <KEY NAME="actionby" TYPE="foreign" FIELDS="actionby" REFTABLE="user" REFFIELDS="id"/>
+      </KEYS>
+      <INDEXES>
+        <INDEX NAME="subid" UNIQUE="false" FIELDS="subid"/>
+        <INDEX NAME="courseid-userid" UNIQUE="false" FIELDS="courseid, userid"/>
       </INDEXES>
     </TABLE>
   </TABLES>

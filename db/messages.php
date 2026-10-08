@@ -70,4 +70,21 @@ $messageproviders = [
             'email' => MESSAGE_PERMITTED,
         ],
     ],
+    // Quality Assurance documents (v26.7.1). 'qasubmission' goes to a
+    // course's assessors when a learner uploads a signed document;
+    // 'qareview' goes to the learner when staff accept or return one.
+    // A return needs the learner to act, so email is on by default for
+    // that one.
+    'qasubmission' => [
+        'defaults' => [
+            'popup' => MESSAGE_PERMITTED + MESSAGE_DEFAULT_ENABLED,
+            'email' => MESSAGE_PERMITTED,
+        ],
+    ],
+    'qareview' => [
+        'defaults' => [
+            'popup' => MESSAGE_PERMITTED + MESSAGE_DEFAULT_ENABLED,
+            'email' => MESSAGE_PERMITTED + MESSAGE_DEFAULT_ENABLED,
+        ],
+    ],
 ];

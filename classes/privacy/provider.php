@@ -166,6 +166,19 @@ class provider implements
             'privacy:metadata:block_nvq_matrix_evidence_comments'
         );
 
+        // Evidence comment history (v26.6.30).
+        $collection->add_database_table(
+            'block_nvq_matrix_evcomments_history',
+            [
+                'studentid'    => 'privacy:metadata:block_nvq_matrix_evidence_comments:studentid',
+                'comment'      => 'privacy:metadata:block_nvq_matrix_evidence_comments:comment',
+                'commentedby'  => 'privacy:metadata:block_nvq_matrix_evidence_comments:commentedby',
+                'timemodified' => 'privacy:metadata:block_nvq_matrix_evidence_comments:timemodified',
+                'archivedtime' => 'privacy:metadata:block_nvq_matrix_history:archivedtime',
+            ],
+            'privacy:metadata:block_nvq_matrix_evcomments_history'
+        );
+
         $collection->add_database_table(
             'block_nvq_matrix_evidence_types',
             [
@@ -229,6 +242,20 @@ class provider implements
                 'clearedby'   => 'privacy:metadata:block_nvq_matrix_cleared_archive:clearedby',
             ],
             'privacy:metadata:block_nvq_matrix_cleared_archive'
+        );
+
+        // Withdrawn status log (v26.6.28).
+        $collection->add_database_table(
+            'block_nvq_matrix_withdrawals',
+            [
+                'studentid'   => 'privacy:metadata:block_nvq_matrix_withdrawals:studentid',
+                'courseid'    => 'privacy:metadata:block_nvq_matrix_withdrawals:courseid',
+                'action'      => 'privacy:metadata:block_nvq_matrix_withdrawals:action',
+                'actiondate'  => 'privacy:metadata:block_nvq_matrix_withdrawals:actiondate',
+                'actionby'    => 'privacy:metadata:block_nvq_matrix_withdrawals:actionby',
+                'timecreated' => 'privacy:metadata:block_nvq_matrix_withdrawals:timecreated',
+            ],
+            'privacy:metadata:block_nvq_matrix_withdrawals'
         );
 
         $collection->add_subsystem_link(
@@ -297,6 +324,37 @@ class provider implements
             ],
             'privacy:metadata:block_nvq_matrix_notified_items'
         );
+
+        // Quality Assurance documents (v26.7.1).
+        $collection->add_database_table(
+            'block_nvq_matrix_qasubs',
+            [
+                'userid'       => 'privacy:metadata:block_nvq_matrix_qasubs:userid',
+                'courseid'     => 'privacy:metadata:block_nvq_matrix_qasubs:courseid',
+                'docid'        => 'privacy:metadata:block_nvq_matrix_qasubs:docid',
+                'status'       => 'privacy:metadata:block_nvq_matrix_qasubs:status',
+                'returnreason' => 'privacy:metadata:block_nvq_matrix_qasubs:returnreason',
+                'reviewedby'   => 'privacy:metadata:block_nvq_matrix_qasubs:reviewedby',
+                'reviewedtime' => 'privacy:metadata:block_nvq_matrix_qasubs:reviewedtime',
+                'timecreated'  => 'privacy:metadata:block_nvq_matrix_qasubs:timecreated',
+                'timemodified' => 'privacy:metadata:block_nvq_matrix_qasubs:timemodified',
+            ],
+            'privacy:metadata:block_nvq_matrix_qasubs'
+        );
+        $collection->add_database_table(
+            'block_nvq_matrix_qalog',
+            [
+                'userid'      => 'privacy:metadata:block_nvq_matrix_qalog:userid',
+                'courseid'    => 'privacy:metadata:block_nvq_matrix_qalog:courseid',
+                'docid'       => 'privacy:metadata:block_nvq_matrix_qalog:docid',
+                'action'      => 'privacy:metadata:block_nvq_matrix_qalog:action',
+                'actionby'    => 'privacy:metadata:block_nvq_matrix_qalog:actionby',
+                'note'        => 'privacy:metadata:block_nvq_matrix_qalog:note',
+                'timecreated' => 'privacy:metadata:block_nvq_matrix_qalog:timecreated',
+            ],
+            'privacy:metadata:block_nvq_matrix_qalog'
+        );
+        $collection->link_subsystem('core_files', 'privacy:metadata:core_files');
 
         return $collection;
     }
@@ -405,6 +463,45 @@ class provider implements
             'userid17'      => $userid,
         ]);
 
+        // Withdrawn status log (v26.6.28) - as the learner or the staff
+        // member who recorded it.
+        $contextlist->add_from_sql("
+            SELECT ctx.id
+              FROM {context} ctx
+              JOIN {block_nvq_matrix_withdrawals} wd ON wd.courseid = ctx.instanceid
+             WHERE ctx.contextlevel = :wdcontextlevel
+               AND (wd.studentid = :wduserid1 OR wd.actionby = :wduserid2)
+        ", [
+            'wdcontextlevel' => CONTEXT_COURSE,
+            'wduserid1'      => $userid,
+            'wduserid2'      => $userid,
+        ]);
+
+        // Quality Assurance documents (v26.7.1) - as the learner, or as
+        // the staff member who accepted or returned an upload.
+        $contextlist->add_from_sql("
+            SELECT ctx.id
+              FROM {context} ctx
+              JOIN {block_nvq_matrix_qasubs} qs ON qs.courseid = ctx.instanceid
+             WHERE ctx.contextlevel = :qacontextlevel1
+               AND (qs.userid = :qauserid1 OR qs.reviewedby = :qauserid2)
+        ", [
+            'qacontextlevel1' => CONTEXT_COURSE,
+            'qauserid1'       => $userid,
+            'qauserid2'       => $userid,
+        ]);
+        $contextlist->add_from_sql("
+            SELECT ctx.id
+              FROM {context} ctx
+              JOIN {block_nvq_matrix_qalog} ql ON ql.courseid = ctx.instanceid
+             WHERE ctx.contextlevel = :qacontextlevel2
+               AND (ql.userid = :qauserid3 OR ql.actionby = :qauserid4)
+        ", [
+            'qacontextlevel2' => CONTEXT_COURSE,
+            'qauserid3'       => $userid,
+            'qauserid4'       => $userid,
+        ]);
+
         // Real gap fixed here (v26.6.9 audit) - see get_metadata() above.
         // block_exaportitem has its own direct courseid + userid columns,
         // so this needs only a single join, unlike evidence_comments'
@@ -475,6 +572,23 @@ class provider implements
             'userid29'       => $userid,
         ]);
 
+        // Evidence comment history (v26.6.30) - course via the mm chain,
+        // same as the live evidence comments.
+        $contextlist->add_from_sql("
+            SELECT ctx.id
+              FROM {context} ctx
+              JOIN {block_exacompcoutopi_mm} ct ON ct.courseid = ctx.instanceid
+              JOIN {block_exacompdescrtopic_mm} dtm ON dtm.topicid = ct.topicid
+              JOIN {block_exacompcompuser_mm} mm ON mm.compid = dtm.descrid
+              JOIN {block_nvq_matrix_evcomments_history} ech ON ech.mmid = mm.id
+             WHERE ctx.contextlevel = :contextlevel13
+               AND (ech.studentid = :userid30 OR ech.commentedby = :userid31)
+        ", [
+            'contextlevel13' => CONTEXT_COURSE,
+            'userid30'       => $userid,
+            'userid31'       => $userid,
+        ]);
+
         return $contextlist;
     }
 
@@ -539,6 +653,24 @@ class provider implements
              WHERE ct.courseid = :courseid AND ec.commentedby IS NOT NULL
         ", ['courseid' => $courseid]);
 
+        // Evidence comment history (v26.6.30).
+        $userlist->add_from_sql('studentid', "
+            SELECT ech.studentid
+              FROM {block_nvq_matrix_evcomments_history} ech
+              JOIN {block_exacompcompuser_mm} mm ON mm.id = ech.mmid
+              JOIN {block_exacompdescrtopic_mm} dtm ON dtm.descrid = mm.compid
+              JOIN {block_exacompcoutopi_mm} ct ON ct.topicid = dtm.topicid
+             WHERE ct.courseid = :courseid
+        ", ['courseid' => $courseid]);
+        $userlist->add_from_sql('commentedby', "
+            SELECT ech.commentedby
+              FROM {block_nvq_matrix_evcomments_history} ech
+              JOIN {block_exacompcompuser_mm} mm ON mm.id = ech.mmid
+              JOIN {block_exacompdescrtopic_mm} dtm ON dtm.descrid = mm.compid
+              JOIN {block_exacompcoutopi_mm} ct ON ct.topicid = dtm.topicid
+             WHERE ct.courseid = :courseid AND ech.commentedby IS NOT NULL
+        ", ['courseid' => $courseid]);
+
         $userlist->add_from_sql('studentid', "
             SELECT studentid FROM {block_nvq_matrix_status} WHERE courseid = :courseid
         ", ['courseid' => $courseid]);
@@ -566,6 +698,29 @@ class provider implements
         $userlist->add_from_sql('clearedby', "
             SELECT clearedby FROM {block_nvq_matrix_cleared_archive}
              WHERE courseid = :courseid AND clearedby IS NOT NULL
+        ", ['courseid' => $courseid]);
+
+        // Withdrawn status log (v26.6.28).
+        $userlist->add_from_sql('studentid', "
+            SELECT studentid FROM {block_nvq_matrix_withdrawals} WHERE courseid = :courseid
+        ", ['courseid' => $courseid]);
+        $userlist->add_from_sql('actionby', "
+            SELECT actionby FROM {block_nvq_matrix_withdrawals} WHERE courseid = :courseid
+        ", ['courseid' => $courseid]);
+
+        // Quality Assurance documents (v26.7.1).
+        $userlist->add_from_sql('userid', "
+            SELECT userid FROM {block_nvq_matrix_qasubs} WHERE courseid = :courseid
+        ", ['courseid' => $courseid]);
+        $userlist->add_from_sql('reviewedby', "
+            SELECT reviewedby FROM {block_nvq_matrix_qasubs}
+             WHERE courseid = :courseid AND reviewedby IS NOT NULL
+        ", ['courseid' => $courseid]);
+        $userlist->add_from_sql('userid', "
+            SELECT userid FROM {block_nvq_matrix_qalog} WHERE courseid = :courseid
+        ", ['courseid' => $courseid]);
+        $userlist->add_from_sql('actionby', "
+            SELECT actionby FROM {block_nvq_matrix_qalog} WHERE courseid = :courseid
         ", ['courseid' => $courseid]);
 
         // Real gap fixed here (v26.6.9 audit) - see get_metadata() above.
@@ -744,6 +899,34 @@ class provider implements
                 );
             }
 
+            // Evidence comment history about this learner (v26.6.30).
+            $ownevhistory = [];
+            $evrs = $DB->get_recordset_sql("
+                SELECT ech.id, ech.comment, ech.timemodified, ech.archivedtime
+                  FROM {block_nvq_matrix_evcomments_history} ech
+                  JOIN {block_exacompcompuser_mm} mm ON mm.id = ech.mmid
+                  JOIN {block_exacompdescrtopic_mm} dtm ON dtm.descrid = mm.compid
+                  JOIN {block_exacompcoutopi_mm} ct ON ct.topicid = dtm.topicid
+                 WHERE ech.studentid = :userid AND ct.courseid = :courseid
+            ", ['userid' => $userid, 'courseid' => $courseid]);
+            foreach ($evrs as $e) {
+                $ownevhistory[(int) $e->id] = (object) [
+                    'comment'      => $e->comment,
+                    'timemodified' => $e->timemodified ? transform::datetime($e->timemodified) : '',
+                    'archivedtime' => transform::datetime($e->archivedtime),
+                ];
+            }
+            $evrs->close();
+            if (!empty($ownevhistory)) {
+                writer::with_context($context)->export_data(
+                    array_merge($subcontext, [
+                        get_string('privacy:historyentries', 'block_nvq_matrix'),
+                        get_string('evidencecommentplaceholder', 'block_nvq_matrix'),
+                    ]),
+                    (object) ['evidencecommentshistory' => array_values($ownevhistory)]
+                );
+            }
+
             $ownstatus = $DB->get_record('block_nvq_matrix_status', [
                 'studentid' => $userid, 'courseid' => $courseid,
             ]);
@@ -823,6 +1006,67 @@ class provider implements
             // long-past teacher action, not something the student
             // experiences directly, so it's exported here alongside its
             // author for context rather than duplicated in both places.
+            // Withdrawn status log (v26.6.28) - entries about this user
+            // as the learner, or recorded by them as staff, together in
+            // one section (same approach as the archive clearances below).
+            $withdrawals = $DB->get_records_select(
+                'block_nvq_matrix_withdrawals',
+                '(studentid = :u1 OR actionby = :u2) AND courseid = :courseid',
+                ['u1' => $userid, 'u2' => $userid, 'courseid' => $courseid],
+                'id ASC'
+            );
+            if (!empty($withdrawals)) {
+                $data = (object) ['withdrawals' => array_values(array_map(function ($w) {
+                    return (object) [
+                        'studentid'  => $w->studentid,
+                        'action'     => ((int) $w->action === 1)
+                            ? get_string('withdrawnstate', 'block_nvq_matrix')
+                            : get_string('reinstatebutton', 'block_nvq_matrix'),
+                        'actiondate' => transform::datetime($w->actiondate),
+                        'actionby'   => $w->actionby,
+                    ];
+                }, $withdrawals))];
+                writer::with_context($context)->export_data(
+                    array_merge($subcontext, [get_string('privacy:withdrawals', 'block_nvq_matrix')]),
+                    $data
+                );
+            }
+
+            // Quality Assurance documents (v26.7.1): this user's own
+            // submissions (with the files they uploaded and any staff
+            // countersigned copy), and a list of the ones they reviewed.
+            $qasubs = $DB->get_records_select(
+                'block_nvq_matrix_qasubs',
+                'courseid = :courseid AND (userid = :u1 OR reviewedby = :u2)',
+                ['courseid' => $courseid, 'u1' => $userid, 'u2' => $userid],
+                'id ASC'
+            );
+            foreach ($qasubs as $qs) {
+                $qadoc = $DB->get_record('block_nvq_matrix_qadocs', ['id' => $qs->docid], 'id, title');
+                $qatitle = $qadoc ? $qadoc->title : ('#' . $qs->docid);
+                $statusnames = [
+                    1 => get_string('qastatusawaiting', 'block_nvq_matrix'),
+                    2 => get_string('qastatusaccepted', 'block_nvq_matrix'),
+                    3 => get_string('qastatusreturned', 'block_nvq_matrix'),
+                    4 => get_string('qastatusawaitingiqa', 'block_nvq_matrix'),
+                ];
+                $qasub = array_merge($subcontext, [get_string('privacy:qadocuments', 'block_nvq_matrix'), clean_param($qatitle, PARAM_FILE) . ' (' . $qs->id . ')']);
+                writer::with_context($context)->export_data($qasub, (object) [
+                    'document'     => $qatitle,
+                    'learner'      => $qs->userid,
+                    'status'       => $statusnames[(int) $qs->status] ?? '',
+                    'returnreason' => $qs->returnreason,
+                    'reviewedby'   => $qs->reviewedby,
+                    'timecreated'  => transform::datetime($qs->timecreated),
+                    'timemodified' => transform::datetime($qs->timemodified),
+                ]);
+                if ((int) $qs->userid === (int) $userid) {
+                    writer::with_context($context)->export_area_files($qasub, 'block_nvq_matrix', \block_nvq_matrix\qa::AREA_LEARNER, (int) $qs->id);
+                    writer::with_context($context)->export_area_files($qasub, 'block_nvq_matrix', \block_nvq_matrix\qa::AREA_COUNTER, (int) $qs->id);
+                    writer::with_context($context)->export_area_files($qasub, 'block_nvq_matrix', \block_nvq_matrix\qa::AREA_IQA, (int) $qs->id);
+                }
+            }
+
             $ownclearedarchive = $DB->get_records('block_nvq_matrix_cleared_archive', [
                 'studentid' => $userid, 'courseid' => $courseid,
             ]);
@@ -1062,6 +1306,16 @@ class provider implements
         // Real gap fixed here (v26.6.3) - see get_metadata() above.
         $DB->delete_records('block_nvq_matrix_assessor', ['courseid' => $courseid]);
         $DB->delete_records('block_nvq_matrix_cleared_archive', ['courseid' => $courseid]);
+        $DB->delete_records('block_nvq_matrix_withdrawals', ['courseid' => $courseid]);
+
+        // Quality Assurance documents (v26.7.1): the uploaded files,
+        // then the rows and the audit entries.
+        $fs = get_file_storage();
+        $fs->delete_area_files($context->id, 'block_nvq_matrix', \block_nvq_matrix\qa::AREA_LEARNER);
+        $fs->delete_area_files($context->id, 'block_nvq_matrix', \block_nvq_matrix\qa::AREA_COUNTER);
+        $fs->delete_area_files($context->id, 'block_nvq_matrix', \block_nvq_matrix\qa::AREA_IQA);
+        $DB->delete_records('block_nvq_matrix_qasubs', ['courseid' => $courseid]);
+        $DB->delete_records('block_nvq_matrix_qalog', ['courseid' => $courseid]);
 
         // Audit-trail history tables (v26.6.13) - deleted alongside their
         // live counterparts for consistency with how every other table in
@@ -1087,6 +1341,18 @@ class provider implements
                 SELECT ec.id
                   FROM {block_nvq_matrix_evidence_comments} ec
                   JOIN {block_exacompcompuser_mm} mm ON mm.id = ec.mmid
+                  JOIN {block_exacompdescrtopic_mm} dtm ON dtm.descrid = mm.compid
+                  JOIN {block_exacompcoutopi_mm} ct ON ct.topicid = dtm.topicid
+                 WHERE ct.courseid = :courseid
+             )
+        ", ['courseid' => $courseid]);
+
+        // Evidence comment history (v26.6.30).
+        $DB->execute("
+            DELETE FROM {block_nvq_matrix_evcomments_history}
+             WHERE mmid IN (
+                SELECT mm.id
+                  FROM {block_exacompcompuser_mm} mm
                   JOIN {block_exacompdescrtopic_mm} dtm ON dtm.descrid = mm.compid
                   JOIN {block_exacompcoutopi_mm} ct ON ct.topicid = dtm.topicid
                  WHERE ct.courseid = :courseid
@@ -1139,6 +1405,11 @@ class provider implements
             $DB->delete_records('block_nvq_matrix_sampling_history', ['studentid' => $userid, 'courseid' => $courseid]);
             $DB->delete_records('block_nvq_matrix_unit_comments_history', ['studentid' => $userid, 'courseid' => $courseid]);
             $DB->delete_records('block_nvq_matrix_status_history', ['studentid' => $userid, 'courseid' => $courseid]);
+            // Withdrawn status log (v26.6.28) - same subject-only rule.
+            $DB->delete_records('block_nvq_matrix_withdrawals', ['studentid' => $userid, 'courseid' => $courseid]);
+            // Quality Assurance documents (v26.7.1) - subject-only, like
+            // the rest: the learner's own submissions, files and log.
+            self::delete_qa_data_for_learner((int) $userid, (int) $courseid);
 
             $DB->execute("
                 DELETE FROM {block_nvq_matrix_evidence_types}
@@ -1153,6 +1424,19 @@ class provider implements
                           JOIN {block_exacompcoutopi_mm} ct ON ct.topicid = dtm.topicid
                          WHERE ct.courseid = :courseid
                      )
+                 )
+            ", ['userid' => $userid, 'courseid' => $courseid]);
+
+            // Evidence comment history (v26.6.30) - subject-only.
+            $DB->execute("
+                DELETE FROM {block_nvq_matrix_evcomments_history}
+                 WHERE studentid = :userid
+                   AND mmid IN (
+                    SELECT mm.id
+                      FROM {block_exacompcompuser_mm} mm
+                      JOIN {block_exacompdescrtopic_mm} dtm ON dtm.descrid = mm.compid
+                      JOIN {block_exacompcoutopi_mm} ct ON ct.topicid = dtm.topicid
+                     WHERE ct.courseid = :courseid
                  )
             ", ['userid' => $userid, 'courseid' => $courseid]);
 
@@ -1209,6 +1493,11 @@ class provider implements
             $DB->delete_records('block_nvq_matrix_sampling_history', ['studentid' => $userid, 'courseid' => $courseid]);
             $DB->delete_records('block_nvq_matrix_unit_comments_history', ['studentid' => $userid, 'courseid' => $courseid]);
             $DB->delete_records('block_nvq_matrix_status_history', ['studentid' => $userid, 'courseid' => $courseid]);
+            // Withdrawn status log (v26.6.28) - same subject-only rule.
+            $DB->delete_records('block_nvq_matrix_withdrawals', ['studentid' => $userid, 'courseid' => $courseid]);
+            // Quality Assurance documents (v26.7.1) - subject-only, like
+            // the rest: the learner's own submissions, files and log.
+            self::delete_qa_data_for_learner((int) $userid, (int) $courseid);
 
             $DB->execute("
                 DELETE FROM {block_nvq_matrix_evidence_types}
@@ -1223,6 +1512,19 @@ class provider implements
                           JOIN {block_exacompcoutopi_mm} ct ON ct.topicid = dtm.topicid
                          WHERE ct.courseid = :courseid
                      )
+                 )
+            ", ['userid' => $userid, 'courseid' => $courseid]);
+
+            // Evidence comment history (v26.6.30) - subject-only.
+            $DB->execute("
+                DELETE FROM {block_nvq_matrix_evcomments_history}
+                 WHERE studentid = :userid
+                   AND mmid IN (
+                    SELECT mm.id
+                      FROM {block_exacompcompuser_mm} mm
+                      JOIN {block_exacompdescrtopic_mm} dtm ON dtm.descrid = mm.compid
+                      JOIN {block_exacompcoutopi_mm} ct ON ct.topicid = dtm.topicid
+                     WHERE ct.courseid = :courseid
                  )
             ", ['userid' => $userid, 'courseid' => $courseid]);
 
@@ -1248,5 +1550,30 @@ class provider implements
                  )
             ", ['userid' => $userid, 'courseid' => $courseid]);
         }
+    }
+
+    /**
+     * Deletes one learner's QA document submissions in a course: the
+     * uploaded and countersigned files, the submission rows and the
+     * audit entries about them (v26.7.1).
+     *
+     * @param int $userid
+     * @param int $courseid
+     * @return void
+     */
+    protected static function delete_qa_data_for_learner(int $userid, int $courseid): void {
+        global $DB;
+        $context = \context_course::instance($courseid, IGNORE_MISSING);
+        $fs = get_file_storage();
+        $subs = $DB->get_records('block_nvq_matrix_qasubs', ['userid' => $userid, 'courseid' => $courseid], '', 'id');
+        foreach ($subs as $sub) {
+            if ($context) {
+                $fs->delete_area_files($context->id, 'block_nvq_matrix', \block_nvq_matrix\qa::AREA_LEARNER, (int) $sub->id);
+                $fs->delete_area_files($context->id, 'block_nvq_matrix', \block_nvq_matrix\qa::AREA_COUNTER, (int) $sub->id);
+                $fs->delete_area_files($context->id, 'block_nvq_matrix', \block_nvq_matrix\qa::AREA_IQA, (int) $sub->id);
+            }
+        }
+        $DB->delete_records('block_nvq_matrix_qasubs', ['userid' => $userid, 'courseid' => $courseid]);
+        $DB->delete_records('block_nvq_matrix_qalog', ['userid' => $userid, 'courseid' => $courseid]);
     }
 }

@@ -228,6 +228,28 @@ if ($canviewall) {
             $memberids = matrix_data::get_viewer_group_memberids($course->id, (int) $USER->id);
             $viewergroupmembersbycourse[(int) $course->id] = $memberids;
             $enrolled = array_intersect_key($enrolled, $memberids);
+        } else if (!is_siteadmin() && !has_capability('block/nvq_matrix:qareview', $ctx)) {
+            // EQA inspection control (v26.7.2) - a DIFFERENT policy from
+            // the mandatory isolation restriction above, not a variant
+            // of it (see matrix_data::get_viewer_inspection_group_
+            // memberids()'s own docblock for the full reasoning): this
+            // viewer isn't isolation-restricted by capability at all
+            // (accessallgroups stays Allow for EQA on this site), but
+            // may have been voluntarily put into a course group for a
+            // single ad hoc inspection ("EQA Review - Batch 4"). Written
+            // generally by actual group membership, per the isolation
+            // guide's Section 2 principle, so it applies the same way
+            // to any reviewing role an admin chooses to place in such a
+            // group, not just 'eqa' by name. A viewer in no group here
+            // keeps seeing every learner, exactly as before this
+            // feature existed - the qareview/siteadmin exclusion above
+            // means an Assessor/IQA/manager incidentally added to a
+            // group for an unrelated reason is never narrowed by this.
+            $inspectionmemberids = matrix_data::get_viewer_inspection_group_memberids($course->id, (int) $USER->id);
+            if ($inspectionmemberids !== null) {
+                $viewergroupmembersbycourse[(int) $course->id] = $inspectionmemberids;
+                $enrolled = array_intersect_key($enrolled, $inspectionmemberids);
+            }
         }
 
         foreach ($enrolled as $u) {
@@ -299,6 +321,12 @@ if ($canviewall) {
                       // $viewallcourseids or $archivedstudentids end up
                       // empty, since the enrolled-rows loop further down
                       // unconditionally reads from both.
+    $withdrawnmap = []; // studentid => [courseid => row] - withdrawn pairs
+                         // only (v26.6.28). Same always-defined reasoning.
+                         // No separate isolation guard needed here - this
+                         // is looked up only for student+course pairs that
+                         // already passed the group-restriction filtering
+                         // applied earlier in this same function.
     if (!empty($viewallcourseids)) {
         // Moodle's DB parameter binding does NOT support reusing the same
         // named placeholder across multiple textual occurrences in one
@@ -623,6 +651,10 @@ if ($canviewall) {
                 $statusmap[(int) $row->studentid][(int) $row->courseid] = $row->status === null ? null : (int) $row->status;
                 $timemap[(int) $row->studentid][(int) $row->courseid]   = $row->timemodified === null ? null : (int) $row->timemodified;
             }
+
+            // Withdrawn status (v26.6.28) for the same student+course
+            // pairs - one query for the whole list.
+            $withdrawnmap = matrix_data::get_withdrawn_map($allstatusstudentids, $courseidlist);
         }
 
         if (!empty($archivedstudentids)) {
@@ -963,6 +995,13 @@ if ($canviewall && (!empty($students) || !empty($archivedrows))) {
         foreach ($courseids as $cid) {
             $status = $statusmap[$student->id][$cid] ?? null;
             $bucket = ($status === 1) ? 'completed' : 'needsgrading';
+            // Withdrawn (v26.6.28) takes precedence over both - a
+            // withdrawn learner shows as Withdrawn whatever else is
+            // recorded, and drops back to their real status (worked out
+            // just above, untouched) as soon as they are reinstated.
+            if (isset($withdrawnmap[$student->id][$cid])) {
+                $bucket = 'withdrawn';
+            }
             $completeddate = '';
             if ($bucket === 'completed') {
                 $passtime = $timemap[$student->id][$cid] ?? null;
@@ -1063,6 +1102,7 @@ if ($canviewall && (!empty($students) || !empty($archivedrows))) {
     $chips = [
         'needsgrading' => get_string('filterneedsgrading', 'block_nvq_matrix'),
         'completed'    => get_string('filtercompleted', 'block_nvq_matrix'),
+        'withdrawn'    => get_string('filterwithdrawn', 'block_nvq_matrix'),
         'all'          => get_string('filterall', 'block_nvq_matrix'),
     ];
     foreach ($chips as $key => $label) {
@@ -1173,6 +1213,7 @@ if ($canviewall && (!empty($students) || !empty($archivedrows))) {
         }
         $badgestring = match ($data['bucket']) {
             'completed' => get_string('statuscompleted', 'block_nvq_matrix'),
+            'withdrawn' => get_string('statuswithdrawn', 'block_nvq_matrix'),
             'archived'  => get_string('statusarchived', 'block_nvq_matrix'),
             default     => get_string('statusneedsgrading', 'block_nvq_matrix'),
         };
@@ -1269,6 +1310,73 @@ if ($canviewall && (!empty($students) || !empty($archivedrows))) {
 // ----------------------------------------------------------------
 
 // ----------------------------------------------------------------
+// Withdrawn status for the learner+course being viewed (v26.6.28).
+// Only meaningful while the learner is still enrolled on that course -
+// an unenrolled learner is already handled by the Archived view, and
+// withdraw.php refuses anyone not enrolled.
+//
+// No separate isolation guard needed here (IOMAD fork note): $studentid
+// and $resolvedcourseid can only ever resolve, a few hundred lines
+// above, to a pair already present in $students/$archivedusers and
+// $studentcourseids/$archivedpairs - all of which were built through
+// this plugin's own group-restriction filtering earlier in this same
+// request. A restricted viewer (Company Manager, or an EQA placed in an
+// inspection group) can never reach this block for a learner outside
+// their own group, by construction, the same way every other feature
+// below this point already relies on that gate.
+// ----------------------------------------------------------------
+$iswithdrawn          = false;
+$iscompleted          = false;
+$showwithdrawpanel    = false;
+$canwithdraw          = false;
+$withdrawtemplatedata = [];
+if ($studentid && $resolvedcourseid) {
+    $iswithdrawn = matrix_data::is_withdrawn((int) $studentid, (int) $resolvedcourseid);
+
+    // Completed (v26.7.4): worked out from the final status, nothing stored.
+    // A recorded Pass on this course shows as Completed instead of Active.
+    // A currently withdrawn learner stays Withdrawn - that is what locks the
+    // matrix - so Completed only applies when they are not withdrawn.
+    if (!$iswithdrawn) {
+        $finalstatusvalue = $DB->get_field('block_nvq_matrix_status', 'status',
+            ['studentid' => (int) $studentid, 'courseid' => (int) $resolvedcourseid]);
+        $iscompleted = ($finalstatusvalue !== false && $finalstatusvalue !== null && (int) $finalstatusvalue === 1);
+    }
+
+    $withdrawctx = context_course::instance($resolvedcourseid, IGNORE_MISSING);
+    $learnerenrolledhere = $withdrawctx && is_enrolled($withdrawctx, $studentid, '', true);
+    if ($canviewall && $learnerenrolledhere && (int) $studentid !== (int) $USER->id) {
+        $showwithdrawpanel = true;
+        $canwithdraw = has_capability('block/nvq_matrix:withdraw', $withdrawctx);
+
+        $withdrawlearner = $DB->get_record('user', ['id' => $studentid],
+            'id, firstname, lastname, firstnamephonetic, lastnamephonetic, middlename, alternatename');
+        $withdrawcourse = format_string($DB->get_field('course', 'fullname', ['id' => $resolvedcourseid]));
+        $confirmparams = [
+            'name'   => $withdrawlearner ? fullname($withdrawlearner) : '',
+            'course' => $withdrawcourse,
+        ];
+        $withdrawallog = matrix_data::get_withdrawal_log((int) $studentid, (int) $resolvedcourseid);
+        $withdrawtemplatedata = [
+            'withdrawurl'       => (new moodle_url('/blocks/nvq_matrix/withdraw.php'))->out(false),
+            'withdrawstudentid' => (int) $studentid,
+            'withdrawcourseid'  => (int) $resolvedcourseid,
+            'withdrawdateiso'   => userdate(time(), '%Y-%m-%d'),
+            'withdrawconfirm'   => get_string('withdrawconfirm', 'block_nvq_matrix', $confirmparams),
+            'reinstateconfirm'  => get_string('reinstateconfirm', 'block_nvq_matrix', $confirmparams),
+            'withdrawallog'     => $withdrawallog,
+            'haswithdrawallog'  => !empty($withdrawallog),
+            'withdrawcoursename' => $withdrawcourse,
+            // Read-only strip at the top (v26.6.29): when withdrawn, show
+            // the change that put them there (newest log line first).
+            'latestwithdrawal'    => ($iswithdrawn && !empty($withdrawallog)) ? $withdrawallog[0]['text'] : '',
+            'haslatestwithdrawal' => ($iswithdrawn && !empty($withdrawallog)),
+            'withdrawlocknote'    => get_string($canwithdraw ? 'withdrawnlocknoteedit' : 'withdrawnlocknote', 'block_nvq_matrix'),
+        ];
+    }
+}
+
+// ----------------------------------------------------------------
 // Build template data using the shared helper.
 // ----------------------------------------------------------------
 $templatedata = matrix_data::build(
@@ -1292,8 +1400,141 @@ $templatedata = matrix_data::build(
     $cangrade,           // cangrade: its own capability (block/nvq_matrix:grade) — editingteacher/manager only.
     $cansample,          // cansample: its own capability (block/nvq_matrix:sample) — editingteacher/manager only.
     $caniqacomment,      // caniqacomment: block/nvq_matrix:iqacomment — teacher (IQA), editingteacher, manager.
-    $canfinalstatus      // canfinalstatus: block/nvq_matrix:finalstatus — editingteacher, manager.
+    $canfinalstatus,     // canfinalstatus: block/nvq_matrix:finalstatus — editingteacher, manager.
+    $iswithdrawn         // islocked: withdrawn learner - every edit control off (v26.6.28).
 );
+
+$templatedata['iswithdrawn']         = $iswithdrawn;
+$templatedata['iscompleted']         = $iscompleted;
+// Deep link to one unit (v26.7.3), used by the Alex D&D dashboard: that unit
+// opens, is highlighted and scrolled to. #history and #item-<id> in the link
+// are handled in the template's script.
+$templatedata['focusunit'] = optional_param('unit', 0, PARAM_INT);
+// Staff who get the read-only status strip do not also need the banner
+// (v26.6.29) - the banner is for the learner viewing their own matrix.
+$templatedata['showwithdrawnbanner'] = $iswithdrawn && !$showwithdrawpanel;
+$templatedata['withdrawnbannertext'] = get_string(
+    ((int) $studentid === (int) $USER->id) ? 'withdrawnbannerown' : 'withdrawnbanner',
+    'block_nvq_matrix'
+);
+$templatedata['showwithdrawpanel'] = $showwithdrawpanel;
+$templatedata['canwithdraw']       = $canwithdraw;
+$templatedata += $withdrawtemplatedata;
+// The Withdraw / Reinstate box only shows in Edit matrix mode (v26.6.29),
+// so the Edit matrix button must stay available to anyone who can act on
+// it - including while the matrix is locked, when build() has switched
+// every other edit control off. Otherwise Reinstate could not be reached.
+$templatedata['caneditanything'] = !empty($templatedata['caneditanything']) || $canwithdraw;
+
+// Single History button (v26.6.30) - one panel with everything for this
+// learner on this course, for anyone with :viewall (history.php checks
+// :viewall on the course again). Sits in the same toolbar as Edit matrix,
+// so the toolbar now shows whenever either button does.
+$showhistory = $canviewall && $studentid && $resolvedcourseid && (int) $studentid !== (int) $USER->id;
+$templatedata['showhistory']      = (bool) $showhistory;
+$templatedata['historystudentid'] = (int) $studentid;
+$templatedata['historycourseid']  = (int) $resolvedcourseid;
+$templatedata['showtoolbar']      = !empty($templatedata['caneditanything']) || $showhistory;
+
+// Quality Assurance documents links (v26.7.1, placed v26.7.2). Shown for
+// the course being viewed when it has at least one QA document: a link to
+// the learner's checklist (their own, or the selected learner for staff)
+// and, for staff, the course tracker with the number of uploads awaiting
+// a check. They sit in the same panel as the Assessment plan, Sampling
+// plan and Sampling record links so the course title appears once; only
+// when that panel does not exist for the course (the portfolio plugin is
+// not set up for it) do they get a panel of their own.
+//
+// No separate isolation guard needed here either, same reasoning as the
+// Withdrawn block above - $studentid is already a group-permitted
+// learner for this viewer by this point, and qa::link_summary() is
+// scoped to that one already-permitted student+course pair. The course
+// tracker (qa.php with no studentid) is gated purely on :viewall here,
+// same as every other staff-side course-level link on this page -
+// qa.php's own page-level isolation (its course tracker grid) is a
+// separate concern, handled where that page builds its own student list.
+$templatedata['showqapanel']  = false;
+$templatedata['hasqalearner'] = false;
+$templatedata['hasqatracker'] = false;
+if ($resolvedcourseid) {
+    $qactx = context_course::instance($resolvedcourseid, IGNORE_MISSING);
+    if ($qactx && !empty(\block_nvq_matrix\qa::get_course_documents((int) $resolvedcourseid))) {
+        $qastaff = has_capability('block/nvq_matrix:viewall', $qactx);
+        $qalinks = [
+            'hasqalearner' => false, 'qalearnerurl' => '', 'qasummarytext' => '',
+            'hasqatracker' => false, 'qatrackerurl' => '', 'qapending' => 0,
+        ];
+        if ($studentid && ($qastaff || (int) $studentid === (int) $USER->id)) {
+            $qasummary = \block_nvq_matrix\qa::link_summary((int) $resolvedcourseid, (int) $studentid);
+            $qalinks['hasqalearner'] = true;
+            $qalinks['qalearnerurl'] = (new moodle_url('/blocks/nvq_matrix/qa.php', [
+                'courseid'  => $resolvedcourseid,
+                'studentid' => (int) $studentid,
+            ]))->out(false);
+            $qalinks['qasummarytext'] = ($qasummary && $qasummary->total > 0)
+                ? $qasummary->accepted . '/' . $qasummary->total
+                : '';
+        }
+        if ($qastaff) {
+            $qalinks['hasqatracker'] = true;
+            $qalinks['qatrackerurl'] = (new moodle_url('/blocks/nvq_matrix/qa.php', [
+                'courseid' => $resolvedcourseid,
+            ]))->out(false);
+            // An IQA (or administrator) also has the uploads that wait for
+            // their signature; everyone else only those waiting for them.
+            $qawaiting = \block_nvq_matrix\qa::can_iqa_sign($qactx)
+                ? [\block_nvq_matrix\qa::ST_AWAITING, \block_nvq_matrix\qa::ST_AWAITING_IQA]
+                : [\block_nvq_matrix\qa::ST_AWAITING];
+            [$qainsql, $qainparams] = $DB->get_in_or_equal($qawaiting, SQL_PARAMS_NAMED, 'qast');
+            $qainparams['qacourse'] = $resolvedcourseid;
+            // Group isolation (v27.1.0, IOMAD fork): count only learners
+            // this viewer may see - the same scope the tracker itself
+            // uses (qa::get_viewer_scope()). Unscoped, a shared course
+            // showed another company's pending uploads in this number,
+            // and it never matched the tracker it links to.
+            $qascope = \block_nvq_matrix\qa::get_viewer_scope($qactx);
+            $qascopesql = '';
+            if ($qascope !== null) {
+                if (empty($qascope)) {
+                    $qascopesql = ' AND 1 = 0';
+                } else {
+                    [$qauinsql, $qauparams] = $DB->get_in_or_equal(array_keys($qascope), SQL_PARAMS_NAMED, 'qau');
+                    $qascopesql = " AND userid $qauinsql";
+                    $qainparams += $qauparams;
+                }
+            }
+            $qalinks['qapending'] = (int) $DB->count_records_select(
+                'block_nvq_matrix_qasubs', "courseid = :qacourse AND status $qainsql" . $qascopesql, $qainparams
+            );
+        }
+        if ($qalinks['hasqalearner'] || $qalinks['hasqatracker']) {
+            $placed = false;
+            if (!empty($templatedata['portfoliolinks'])) {
+                foreach ($templatedata['portfoliolinks'] as $pfi => $pf) {
+                    $match = ((int) ($pf['courseid'] ?? 0) === (int) $resolvedcourseid);
+                    $templatedata['portfoliolinks'][$pfi]['pfhasqalearner'] = $match && $qalinks['hasqalearner'];
+                    $templatedata['portfoliolinks'][$pfi]['pfhasqatracker'] = $match && $qalinks['hasqatracker'];
+                    if ($match) {
+                        $templatedata['portfoliolinks'][$pfi]['pfqalearnerurl']   = $qalinks['qalearnerurl'];
+                        $templatedata['portfoliolinks'][$pfi]['pfqasummarytext']  = $qalinks['qasummarytext'];
+                        $templatedata['portfoliolinks'][$pfi]['pfqatrackerurl']   = $qalinks['qatrackerurl'];
+                        $templatedata['portfoliolinks'][$pfi]['pfqapending']      = $qalinks['qapending'];
+                        $placed = true;
+                    }
+                }
+            }
+            if (!$placed) {
+                $templatedata = array_merge($templatedata, $qalinks);
+                $templatedata['qacoursename'] = format_string(
+                    $DB->get_field('course', 'fullname', ['id' => $resolvedcourseid]),
+                    true,
+                    ['context' => $qactx]
+                );
+                $templatedata['showqapanel'] = true;
+            }
+        }
+    }
+}
 
 // Course switcher only exists for the plain-student branch above (a
 // canviewall assessor/IQA already switches course via the main student+

@@ -67,6 +67,10 @@ class matrix_data {
      *                                   covers that, per client feedback.
      * @param bool   $canfinalstatus     Whether the current user may set the final Pass/Fail status and
      *                                   trigger the completion notification (block/nvq_matrix:finalstatus).
+     * @param bool   $islocked           True when the learner is marked withdrawn from this course
+     *                                   (v26.6.28) - every edit control is switched off for everyone,
+     *                                   including the learner's own evidence-type editing, until they
+     *                                   are reinstated. The endpoints enforce the same lock server-side.
      * @return array                   Template data ready to pass to render_from_template().
      */
     public static function build(
@@ -78,16 +82,27 @@ class matrix_data {
         bool   $cangrade     = false,
         bool   $cansample    = false,
         bool   $caniqacomment      = false,
-        bool   $canfinalstatus     = false
+        bool   $canfinalstatus     = false,
+        bool   $islocked           = false
     ): array {
         global $DB, $USER;
+
+        // Withdrawn learner (v26.6.28): lock every edit control. Done
+        // once here so every per-unit/per-evidence flag derived from
+        // these below inherits the lock automatically.
+        if ($islocked) {
+            $cangrade       = false;
+            $cansample      = false;
+            $caniqacomment  = false;
+            $canfinalstatus = false;
+        }
 
         // Evidence type is deliberately editable by the student themselves,
         // not just assessor/IQA — client's call: it's the student who knows
         // what a given piece of evidence actually is, and getting it wrong
         // doesn't affect their grade. Everything else in this plugin stays
         // assessor/IQA-only.
-        $isownmatrix = ($studentid === (int) $USER->id);
+        $isownmatrix = ($studentid === (int) $USER->id) && !$islocked;
 
         // Idle state — assessor has not yet chosen a student.
         if ($canviewall && $studentid === 0) {
@@ -1164,6 +1179,33 @@ class matrix_data {
         }
     }
 
+    /**
+     * Snapshots the given evidence comments into their history table
+     * before delete_archived.php removes them (v26.6.30) - the evidence
+     * comment equivalent of snapshot_all_before_permanent_delete(), which
+     * cannot do this itself because evidence comments have no courseid.
+     *
+     * @param int[] $commentids block_nvq_matrix_evidence_comments ids.
+     * @return void
+     */
+    public static function snapshot_evidence_comments_before_delete(array $commentids): void {
+        global $DB;
+
+        if (empty($commentids)) {
+            return;
+        }
+        $now = time();
+        [$insql, $params] = $DB->get_in_or_equal($commentids, SQL_PARAMS_NAMED, 'evc');
+        foreach ($DB->get_records_select('block_nvq_matrix_evidence_comments', "id $insql", $params) as $row) {
+            if (trim((string) $row->comment) === '') {
+                continue;
+            }
+            self::snapshot_history('block_nvq_matrix_evcomments_history', $row, [
+                'studentid', 'mmid', 'itemid', 'comment', 'commentedby', 'timemodified',
+            ], $now);
+        }
+    }
+
     public static function save_final_status(int $studentid, int $courseid, int $status, int $setdate = 0): void {
         global $DB, $USER;
 
@@ -1503,6 +1545,49 @@ class matrix_data {
     }
 
     /**
+     * EQA inspection group scoping (v26.7.2) — deliberately a DIFFERENT
+     * policy from get_viewer_group_memberids()/is_group_restricted()
+     * above, not a variant of it. Those two exist to enforce mandatory
+     * tenant isolation for a role whose moodle/site:accessallgroups is
+     * Prevent (Assessor, Company role) — fail-closed when ungrouped,
+     * because "no group" must never silently mean "see everyone" for an
+     * isolation boundary. EQA is different: EQA already holds :viewall
+     * platform-wide and is NOT isolation-restricted by capability at
+     * all (accessallgroups stays Allow for this role) — being put into
+     * a course group here is a voluntary, opt-in narrowing for a single
+     * inspection ("EQA Review — Batch 4"), not a security boundary this
+     * plugin is relying on. So the fallback when ungrouped is the
+     * opposite: see everyone, exactly as before this feature existed.
+     *
+     * Per the isolation guide's Section 2 principle this is still
+     * written generally — by actual group membership, never by role
+     * shortname — so it applies identically to any reviewing role an
+     * admin chooses to place in an ad hoc inspection group, not just
+     * 'eqa'. Call sites decide WHICH viewers this applies to (currently:
+     * a viewer who is not a site admin and does not hold
+     * block/nvq_matrix:qareview, matching the plain-Moodle source's own
+     * condition for when this narrowing should even be considered).
+     *
+     * @param int $courseid
+     * @param int|null $viewerid Defaults to $USER->id.
+     * @return array|null userid => true for the viewer's group members, or null if the viewer is in no group here (meaning: do not restrict).
+     */
+    public static function get_viewer_inspection_group_memberids(int $courseid, ?int $viewerid = null): ?array {
+        global $USER, $DB;
+        $viewerid = $viewerid ?? (int) $USER->id;
+
+        $usergroups = groups_get_user_groups($courseid, $viewerid);
+        $groupids = $usergroups[0] ?? [];
+        if (empty($groupids)) {
+            return null;
+        }
+
+        list($ginsql, $ginparams) = $DB->get_in_or_equal($groupids, SQL_PARAMS_NAMED, 'gvig');
+        $memberids = $DB->get_fieldset_select('groups_members', 'userid', "groupid $ginsql", $ginparams);
+        return array_flip($memberids);
+    }
+
+    /**
      * Users eligible to be designated Assessor for a course: anyone
      * currently enrolled who holds block/nvq_matrix:grade there
      * (editingteacher/manager on this site - see db/access.php). The
@@ -1534,6 +1619,246 @@ class matrix_data {
             'u.lastname ASC, u.firstname ASC'
         );
         return self::filter_users_by_viewer_group($candidates, $courseid, $viewerid);
+    }
+
+    /**
+     * Withdrawn status (v26.6.28): the current state for every given
+     * student+course pair, returned only for pairs that are currently
+     * withdrawn. The withdrawals table is an append-only log, so the
+     * current state of a pair is simply its newest row (highest id - not
+     * highest actiondate, since that date can be backdated).
+     *
+     * No isolation guard inside this helper itself, same convention as
+     * every other pure data accessor in this class (get_assessor(),
+     * save_grade(), etc.) - call sites apply viewer_can_access_student()
+     * or the group-restriction filter on their own result set, same as
+     * they already do for everything else this returns.
+     *
+     * @param int[] $studentids
+     * @param int[] $courseids
+     * @return array studentid => [courseid => newest row], withdrawn pairs only.
+     */
+    public static function get_withdrawn_map(array $studentids, array $courseids): array {
+        global $DB;
+
+        $map = [];
+        $studentids = array_values(array_unique(array_map('intval', $studentids)));
+        $courseids  = array_values(array_unique(array_map('intval', $courseids)));
+        if (empty($studentids) || empty($courseids)) {
+            return $map;
+        }
+
+        list($sinsql, $sparams) = $DB->get_in_or_equal($studentids, SQL_PARAMS_NAMED, 'wsid');
+        list($cinsql, $cparams) = $DB->get_in_or_equal($courseids, SQL_PARAMS_NAMED, 'wcid');
+        $rows = $DB->get_records_sql("
+            SELECT w.id, w.studentid, w.courseid, w.action, w.actiondate, w.actionby
+              FROM {block_nvq_matrix_withdrawals} w
+              JOIN (SELECT MAX(id) AS maxid
+                      FROM {block_nvq_matrix_withdrawals}
+                     WHERE studentid $sinsql AND courseid $cinsql
+                  GROUP BY studentid, courseid) latest ON latest.maxid = w.id
+             WHERE w.action = 1
+        ", $sparams + $cparams);
+
+        foreach ($rows as $row) {
+            $map[(int) $row->studentid][(int) $row->courseid] = $row;
+        }
+        return $map;
+    }
+
+    /**
+     * Whether a learner is currently marked withdrawn from a course.
+     * Used by every write endpoint to enforce the lock server-side.
+     *
+     * @param int $studentid
+     * @param int $courseid
+     * @return bool
+     */
+    public static function is_withdrawn(int $studentid, int $courseid): bool {
+        global $DB;
+
+        $latest = $DB->get_records(
+            'block_nvq_matrix_withdrawals',
+            ['studentid' => $studentid, 'courseid' => $courseid],
+            'id DESC',
+            'id, action',
+            0,
+            1
+        );
+        if (empty($latest)) {
+            return false;
+        }
+        return (int) reset($latest)->action === 1;
+    }
+
+    /**
+     * The full withdraw/reinstate log for one learner on one course,
+     * newest first, ready for display.
+     *
+     * @param int $studentid
+     * @param int $courseid
+     * Each entry also carries its row id and, since every entry can be
+     * deleted by a site admin (v26.6.30), whether deleting it would
+     * change the learner's current status - so the confirmation can say
+     * so (see withdrawal_entry_deletable()).
+     *
+     * @return array List of ['id' => int, 'text' => "Withdrawn 01/02/2026 by Name",
+     *               'changesstatus' => bool, 'statusafterwithdrawn' => bool].
+     */
+    public static function get_withdrawal_log(int $studentid, int $courseid): array {
+        global $DB;
+
+        $rows = $DB->get_records(
+            'block_nvq_matrix_withdrawals',
+            ['studentid' => $studentid, 'courseid' => $courseid],
+            'id DESC'
+        );
+        if (empty($rows)) {
+            return [];
+        }
+
+        $userids = [];
+        foreach ($rows as $row) {
+            $userids[(int) $row->actionby] = true;
+        }
+        $names = [];
+        $users = $DB->get_records_list(
+            'user',
+            'id',
+            array_keys($userids),
+            '',
+            'id, firstname, lastname, firstnamephonetic, lastnamephonetic, middlename, alternatename'
+        );
+        foreach ($users as $u) {
+            $names[(int) $u->id] = fullname($u);
+        }
+
+        $actions = array_map(function($r) {
+            return (int) $r->action;
+        }, array_values($rows));
+
+        $log = [];
+        $index = 0;
+        foreach ($rows as $row) {
+            $a = [
+                'date' => userdate((int) $row->actiondate, '%d/%m/%Y'),
+                'name' => $names[(int) $row->actionby] ?? '',
+            ];
+            $log[] = [
+                'id'            => (int) $row->id,
+                'changesstatus' => !self::withdrawal_entry_deletable($actions, $index),
+                // Status the learner would have if this entry were deleted.
+                'statusafterwithdrawn' => ($index === 0)
+                    ? (isset($actions[1]) && $actions[1] === 1)
+                    : (!empty($actions) && $actions[0] === 1),
+                'text'      => get_string(
+                    ((int) $row->action === 1) ? 'withdrawnlogwithdrawn' : 'withdrawnlogreinstated',
+                    'block_nvq_matrix',
+                    $a
+                ),
+            ];
+            $index++;
+        }
+        return $log;
+    }
+
+    /**
+     * Whether deleting one entry in a learner's withdraw/reinstate log
+     * leaves their current status unchanged (v26.6.29). The log is not
+     * only an audit trail - its newest row IS the learner's current
+     * status. Any older entry is safe; the newest is only safe when the
+     * entry before it says the same thing (or it is the last remaining
+     * entry and the learner is Active).
+     *
+     * v26.6.30 (client decision 2026-10-05): every entry can now be
+     * deleted by a site admin. This check no longer blocks a delete - it
+     * decides whether the confirmation warns that the status will change
+     * (and so lock or unlock the matrix).
+     *
+     * @param int[] $actions Every entry's action (1 withdrawn, 0 reinstated), newest first.
+     * @param int $index Position of the entry being checked in $actions.
+     * @return bool
+     */
+    public static function withdrawal_entry_deletable(array $actions, int $index): bool {
+        if (!isset($actions[$index])) {
+            return false;
+        }
+        $current = !empty($actions) && $actions[0] === 1;
+        if ($index > 0) {
+            $after = $current;
+        } else {
+            $after = isset($actions[1]) && $actions[1] === 1;
+        }
+        return $after === $current;
+    }
+
+    /**
+     * Permanently deletes one withdraw/reinstate log entry (v26.6.29).
+     * Called only from history.php's action=delete, which requires
+     * is_siteadmin() - the same rule as every other history delete.
+     * Re-checks server-side that the row belongs to this learner and
+     * course. Since v26.6.30 any entry may be deleted, including the
+     * newest - which changes the learner's current status; the page
+     * warns about that before sending the request.
+     *
+     * @param int $entryid
+     * @param int $studentid
+     * @param int $courseid
+     * @return bool True if the entry was found, allowed and deleted.
+     */
+    public static function delete_withdrawal_entry(int $entryid, int $studentid, int $courseid): bool {
+        global $DB;
+
+        $rows = array_values($DB->get_records(
+            'block_nvq_matrix_withdrawals',
+            ['studentid' => $studentid, 'courseid' => $courseid],
+            'id DESC',
+            'id, action'
+        ));
+        $actions = [];
+        $index = null;
+        foreach ($rows as $i => $row) {
+            $actions[] = (int) $row->action;
+            if ((int) $row->id === $entryid) {
+                $index = $i;
+            }
+        }
+        if ($index === null) {
+            return false;
+        }
+
+        $DB->delete_records('block_nvq_matrix_withdrawals', [
+            'id'        => $entryid,
+            'studentid' => $studentid,
+            'courseid'  => $courseid,
+        ]);
+        return true;
+    }
+
+    /**
+     * Records a withdrawal or reinstatement. Only ever inserts - the
+     * table is append-only, so it is its own audit trail. The caller
+     * (withdraw.php) is responsible for permission checks and for
+     * confirming the learner is not already in the requested state.
+     *
+     * @param int  $studentid
+     * @param int  $courseid
+     * @param bool $withdrawn  True to withdraw, false to reinstate.
+     * @param int  $actiondate Entered date from parse_comment_date(), or 0 for "now".
+     * @return void
+     */
+    public static function record_withdrawal(int $studentid, int $courseid, bool $withdrawn, int $actiondate = 0): void {
+        global $DB, $USER;
+
+        $now = time();
+        $DB->insert_record('block_nvq_matrix_withdrawals', (object) [
+            'studentid'   => $studentid,
+            'courseid'    => $courseid,
+            'action'      => $withdrawn ? 1 : 0,
+            'actiondate'  => $actiondate > 0 ? $actiondate : $now,
+            'actionby'    => (int) $USER->id,
+            'timecreated' => $now,
+        ]);
     }
 
     /**
@@ -1727,9 +2052,12 @@ class matrix_data {
      * and not dependent on exacomp's message provider surviving an
      * exacomp upgrade unchanged.
      *
-     * Silently does nothing if no assessor has been designated for this
-     * course yet - this is a routine "not configured" state (client
-     * hasn't set the dropdown), not an error.
+     * Notifies every user holding the Assessor role (shortname
+     * 'assessor') in this course - v26.6.27; previously only the single
+     * designated assessor from assessor_manage.php. Falls back to that
+     * designated assessor only when the course has nobody with the
+     * Assessor role. Silently does nothing if neither exists - a routine
+     * "not configured" state, not an error.
      *
      * @param int $courseid
      * @param int $studentid The student who submitted.
@@ -1739,24 +2067,25 @@ class matrix_data {
     public static function notify_assessor_of_submission(int $courseid, int $studentid, int $itemid): void {
         global $DB;
 
-        $assessorrow = self::get_assessor($courseid);
-        if (!$assessorrow) {
+        $context = \context_course::instance($courseid, IGNORE_MISSING);
+        $student = $DB->get_record('user', ['id' => $studentid], '*', IGNORE_MISSING);
+        $course  = $DB->get_record('course', ['id' => $courseid], 'id, fullname', IGNORE_MISSING);
+        if (!$context || !$student || !$course) {
             return;
         }
 
-        // Guard against the assessor having since lost :grade (unenrolled,
-        // role changed) without the dropdown being explicitly re-saved -
-        // same defensive spirit as the check in save_assessor(), just
-        // read-side here rather than rejecting the save.
-        $context = \context_course::instance($courseid);
-        if (!has_capability('block/nvq_matrix:grade', $context, $assessorrow->userid)) {
+        // Withdrawn learner (v26.6.28): their matrix is locked, so no
+        // assessor can act on new evidence until they are reinstated -
+        // a notification would only ask for something that cannot be
+        // done. The learner can still upload in ePortfolio (third-party,
+        // not locked by this plugin); the assessor will see that
+        // evidence on the matrix once the learner is reinstated.
+        if (self::is_withdrawn($studentid, $courseid)) {
             return;
         }
 
-        $assessor = $DB->get_record('user', ['id' => $assessorrow->userid], '*', IGNORE_MISSING);
-        $student  = $DB->get_record('user', ['id' => $studentid], '*', IGNORE_MISSING);
-        $course   = $DB->get_record('course', ['id' => $courseid], 'id, fullname', IGNORE_MISSING);
-        if (!$assessor || !$student || !$course) {
+        $recipientids = self::get_assessor_recipient_ids($courseid, $context, $studentid);
+        if (empty($recipientids)) {
             return;
         }
 
@@ -1769,33 +2098,97 @@ class matrix_data {
             'course'  => $coursename,
         ]);
 
-        // Real bug fixed here (v26.6.3): view.php explicitly treats a
-        // bare nvq_matrix_student param with no matching
-        // nvq_matrix_course as unresolved and falls back to the idle
-        // "no student selected" state (see its own comments on the
-        // combined-view leak this enforces) - so this link was landing
-        // assessors on an empty picker screen instead of deep-linking to
-        // the student's matrix. Both params are required together.
+        // Both params are required together - see v26.6.3: a bare
+        // nvq_matrix_student with no nvq_matrix_course falls back to the
+        // idle picker instead of deep-linking to the learner's matrix.
         $contexturl = new \moodle_url('/blocks/nvq_matrix/view.php', [
             'nvq_matrix_student' => $studentid,
             'nvq_matrix_course'  => $courseid,
         ]);
 
-        $message = new \core\message\message();
-        $message->component       = 'block_nvq_matrix';
-        $message->name             = 'assessorsubmission';
-        $message->userfrom          = $student;
-        $message->userto            = $assessor;
-        $message->subject           = $subject;
-        $message->fullmessage       = html_to_text($body);
-        $message->fullmessageformat = FORMAT_HTML;
-        $message->fullmessagehtml   = $body;
-        $message->smallmessage      = $subject;
-        $message->notification      = 1;
-        $message->contexturl        = $contexturl->out(false);
-        $message->contexturlname    = get_string('viewyourmatrix', 'block_nvq_matrix');
+        foreach ($recipientids as $uid) {
+            if ((int) $uid === (int) $studentid) {
+                continue;
+            }
+            $assessor = $DB->get_record('user', ['id' => $uid, 'deleted' => 0], '*', IGNORE_MISSING);
+            if (!$assessor) {
+                continue;
+            }
 
-        message_send($message);
+            $message = new \core\message\message();
+            $message->component         = 'block_nvq_matrix';
+            $message->name              = 'assessorsubmission';
+            $message->userfrom          = $student;
+            $message->userto            = $assessor;
+            $message->subject           = $subject;
+            $message->fullmessage       = html_to_text($body);
+            $message->fullmessageformat = FORMAT_HTML;
+            $message->fullmessagehtml   = $body;
+            $message->smallmessage      = $subject;
+            $message->notification      = 1;
+            $message->contexturl        = $contexturl->out(false);
+            $message->contexturlname    = get_string('viewyourmatrix', 'block_nvq_matrix');
+
+            message_send($message);
+        }
+    }
+
+    /**
+     * Returns the user ids that should receive assessor notifications
+     * for a course (v26.6.27): every user holding the Assessor role
+     * (shortname 'assessor', never a hardcoded id - role ids differ
+     * between staging and production) directly in this course, who is
+     * actively enrolled and holds block/nvq_matrix:grade here. Falls
+     * back to the designated assessor (assessor_manage.php) only when
+     * nobody in the course has the Assessor role, so no course loses
+     * notifications. Public so the QA document upload notifications can
+     * reuse exactly the same rule.
+     *
+     * Group isolation (v27.1.0, IOMAD fork): every recipient must also
+     * be allowed to access THIS learner (viewer_can_access_student()) -
+     * the notification carries the learner's name, the course and (for
+     * QA uploads) the document title, so sending it to an Assessor from
+     * another company on a shared course is a cross-tenant leak. The
+     * fallback designated assessor is checked the same way, since that
+     * slot is one per course, not per company. Without a permitted
+     * recipient nobody is notified - the same "not configured" outcome
+     * as a course with no assessor at all.
+     *
+     * @param int $courseid
+     * @param \context_course $context
+     * @param int $studentid The learner the notification is about.
+     * @return int[]
+     */
+    public static function get_assessor_recipient_ids(int $courseid, \context_course $context, int $studentid): array {
+        global $DB;
+
+        $ids = $DB->get_fieldset_sql("
+            SELECT DISTINCT ra.userid
+              FROM {role_assignments} ra
+              JOIN {role} r ON r.id = ra.roleid
+             WHERE ra.contextid = :contextid
+               AND r.shortname = :shortname",
+            ['contextid' => $context->id, 'shortname' => 'assessor']);
+
+        $recipients = [];
+        foreach ($ids as $uid) {
+            $uid = (int) $uid;
+            if (is_enrolled($context, $uid, '', true)
+                    && has_capability('block/nvq_matrix:grade', $context, $uid)
+                    && self::viewer_can_access_student($courseid, $studentid, $uid)) {
+                $recipients[$uid] = $uid;
+            }
+        }
+
+        if (empty($recipients)) {
+            $row = self::get_assessor($courseid);
+            if ($row && has_capability('block/nvq_matrix:grade', $context, $row->userid)
+                    && self::viewer_can_access_student($courseid, $studentid, (int) $row->userid)) {
+                $recipients[(int) $row->userid] = (int) $row->userid;
+            }
+        }
+
+        return array_values($recipients);
     }
 
     /**
@@ -2283,6 +2676,17 @@ class matrix_data {
         ]);
 
         if ($existing) {
+            // History (v26.6.30): keep the old comment before it is
+            // overwritten or cleared. Only a real, changed comment is
+            // kept - a row created just to hold an evidence type has no
+            // comment, and re-saving the same text adds nothing.
+            $oldcomment = (string) ($existing->comment ?? '');
+            if (trim($oldcomment) !== '' && $oldcomment !== $comment) {
+                self::snapshot_history('block_nvq_matrix_evcomments_history', $existing, [
+                    'studentid', 'mmid', 'itemid', 'comment', 'commentedby', 'timemodified',
+                ], self::resolve_archivedtime($commentdate));
+            }
+
             $existing->comment      = $comment;
             $existing->itemid       = $itemid;
             $existing->timemodified = $now;
@@ -2555,6 +2959,119 @@ class matrix_data {
     }
 
     /**
+     * Everything in one learner's history for one course, for the single
+     * History panel at the top of the matrix (v26.6.30): Enrolment status,
+     * Final status, then each unit in matrix order (grade, sampling, IQA
+     * comment, evidence comments). Units with no history are left out.
+     *
+     * No isolation guard inside this helper itself - same convention as
+     * get_unit_history()/get_sampling_history()/get_status_history()
+     * just below, which this calls: history.php's own action=all is
+     * responsible for the viewer_can_access_student() check before
+     * calling this, same as it already does for every other history
+     * action.
+     *
+     * @param int $studentid
+     * @param int $courseid
+     * @return array ['enrolment' => [], 'finalstatus' => [], 'units' => [['title' => '', 'grade' => [], ...]]]
+     */
+    public static function get_course_history(int $studentid, int $courseid): array {
+        global $DB;
+
+        $enrolment = [];
+        foreach (self::get_withdrawal_log($studentid, $courseid) as $entry) {
+            $confirm = '';
+            if ($entry['changesstatus']) {
+                $confirm = get_string(
+                    $entry['statusafterwithdrawn'] ? 'withdrawdeletetowithdrawn' : 'withdrawdeletetoactive',
+                    'block_nvq_matrix'
+                );
+            }
+            $enrolment[] = (object) [
+                'id'            => $entry['id'],
+                'text'          => $entry['text'],
+                'changesstatus' => $entry['changesstatus'],
+                'confirm'       => $confirm,
+            ];
+        }
+
+        // Evidence comment history for this course, grouped by unit.
+        // Recordset rather than get_records_sql: one history row can join
+        // to more than one topic, so the first column is not unique.
+        // Explicit context for format_string(): history.php is an AJAX
+        // endpoint that never sets $PAGE's context.
+        $fmtctx = \context_course::instance($courseid);
+
+        $evidencebytopic = [];
+        $seen = [];
+        $userids = [];
+        $rs = $DB->get_recordset_sql("
+            SELECT h.id, h.comment, h.commentedby, h.timemodified, dtm.topicid, i.name AS itemname
+              FROM {block_nvq_matrix_evcomments_history} h
+              JOIN {block_exacompcompuser_mm} mm ON mm.id = h.mmid
+              JOIN {block_exacompdescrtopic_mm} dtm ON dtm.descrid = mm.compid
+              JOIN {block_exacompcoutopi_mm} ct ON ct.topicid = dtm.topicid AND ct.courseid = :courseid
+         LEFT JOIN {block_exaportitem} i ON i.id = h.itemid
+             WHERE h.studentid = :studentid
+          ORDER BY h.archivedtime DESC, h.id DESC
+        ", ['studentid' => $studentid, 'courseid' => $courseid]);
+        foreach ($rs as $r) {
+            if (isset($seen[(int) $r->id])) {
+                continue;
+            }
+            $seen[(int) $r->id] = true;
+            $userids[(int) $r->commentedby] = true;
+            $evidencebytopic[(int) $r->topicid][] = $r;
+        }
+        $rs->close();
+        unset($userids[0]);
+        $usernames = self::get_fullnames_for_ids(array_keys($userids));
+
+        $topicids = $DB->get_fieldset_select('block_exacompcoutopi_mm', 'DISTINCT topicid', 'courseid = :courseid',
+            ['courseid' => $courseid]);
+        $topics = [];
+        if (!empty($topicids)) {
+            [$tinsql, $tparams] = $DB->get_in_or_equal($topicids, SQL_PARAMS_NAMED, 'htopic');
+            // Same order as the matrix itself (topic id ascending).
+            $topics = $DB->get_records_select('block_exacomptopics', "id $tinsql", $tparams, 'id ASC', 'id, title');
+        }
+
+        $units = [];
+        foreach ($topics as $topic) {
+            $tid = (int) $topic->id;
+            $unithistory = self::get_unit_history($tid, $studentid, $courseid);
+            $sampling = self::get_sampling_history($tid, $studentid, $courseid);
+            $evidence = [];
+            foreach ($evidencebytopic[$tid] ?? [] as $r) {
+                $evidence[] = (object) [
+                    'id'       => (int) $r->id,
+                    'itemname' => $r->itemname !== null ? format_string($r->itemname, true, ['escape' => false, 'context' => $fmtctx]) : '',
+                    'comment'  => (string) $r->comment,
+                    'setby'    => $usernames[(int) $r->commentedby] ?? '',
+                    'settime'  => $r->timemodified ? userdate($r->timemodified, '%d/%m/%Y') : '',
+                ];
+            }
+            if (empty($unithistory['grade']) && empty($sampling) && empty($unithistory['unitcomment']) && empty($evidence)) {
+                continue;
+            }
+            $units[] = (object) [
+                // Plain text: the page escapes it when drawing the panel.
+                'title'           => format_string($topic->title, true, ['escape' => false, 'context' => $fmtctx]),
+                'grade'           => $unithistory['grade'],
+                'sampling'        => $sampling,
+                'unitcomment'     => $unithistory['unitcomment'],
+                'evidencecomment' => $evidence,
+            ];
+        }
+
+        return [
+            'enrolment'   => $enrolment,
+            'finalstatus' => self::get_status_history($studentid, $courseid),
+            'units'       => $units,
+        ];
+    }
+
+    /**
      * Returns a course's final Pass/Fail status history for one student,
      * most recent first.
      *
@@ -2615,7 +3132,7 @@ class matrix_data {
      * $type is a short internal label, not a raw table name - never
      * pass user input directly as a table name.
      *
-     * @param string $type 'grade' | 'sampling' | 'unitcomment' | 'status'
+     * @param string $type 'grade' | 'sampling' | 'unitcomment' | 'status' | 'evidencecomment'
      * @param int $historyid The specific history row's own id.
      * @param int $studentid
      * @param int $courseid
@@ -2630,6 +3147,25 @@ class matrix_data {
             'unitcomment' => 'block_nvq_matrix_unit_comments_history',
             'status'      => 'block_nvq_matrix_status_history',
         ];
+
+        // Evidence comment history (v26.6.30) has no courseid column -
+        // confirm the entry belongs to this learner AND this course via
+        // the usual mm -> descriptor -> topic -> course chain.
+        if ($type === 'evidencecomment') {
+            $belongs = $DB->record_exists_sql("
+                SELECT 1
+                  FROM {block_nvq_matrix_evcomments_history} h
+                  JOIN {block_exacompcompuser_mm} mm ON mm.id = h.mmid
+                  JOIN {block_exacompdescrtopic_mm} dtm ON dtm.descrid = mm.compid
+                  JOIN {block_exacompcoutopi_mm} ct ON ct.topicid = dtm.topicid
+                 WHERE h.id = :id AND h.studentid = :studentid AND ct.courseid = :courseid
+            ", ['id' => $historyid, 'studentid' => $studentid, 'courseid' => $courseid]);
+            if (!$belongs) {
+                return false;
+            }
+            $DB->delete_records('block_nvq_matrix_evcomments_history', ['id' => $historyid, 'studentid' => $studentid]);
+            return true;
+        }
 
         if (!isset($tables[$type])) {
             return false;
@@ -3117,6 +3653,7 @@ class matrix_data {
             }
 
             $links[] = [
+                'courseid' => $courseid,
                 'coursename' => format_string($row->fullname),
                 'assessmentplanurl' => (new \moodle_url('/local/nvqportfolio/assessment_plan_view.php', [
                     'courseid' => $courseid,

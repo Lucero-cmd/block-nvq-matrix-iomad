@@ -20,20 +20,28 @@
  * (classes/privacy/provider.php's own tables were the backend; this is
  * where an assessor/IQA/EQA/manager actually reads it).
  *
- * Three actions:
- *   - action=unit    : one unit's grade-verdict/comment history AND
- *                       sampling history together (topicid required).
+ * Actions:
+ *   - action=all      : everything for this learner on this course in one
+ *                        response - grades/sampling/unit comments/status/
+ *                        withdrawal log/evidence-comment history together
+ *                        (v26.6.30 unified History panel). No topicid.
+ *   - action=unit     : one unit's grade-verdict/comment history AND
+ *                        sampling history together (topicid required).
  *   - action=status   : one course's final Pass/Fail status history
  *                        (no topicid - status is course-level, not
  *                        per-unit).
- *   - action=delete   : permanently deletes ONE specific history row.
+ *   - action=withdrawal: one course's enrolment status (withdrawn/
+ *                        reinstated) log (v26.6.29).
+ *   - action=delete   : permanently deletes ONE specific history row,
+ *                        including a withdrawal-log row or an
+ *                        evidence-comment history row.
  *                        Gated on genuine site admin status
  *                        (is_siteadmin()), not :viewall, not manager -
  *                        client decision (2026-09-08): editing the
  *                        audit trail itself is sensitive enough that
  *                        even a Manager shouldn't be able to do it.
  *
- * unit/status are gated on block/nvq_matrix:viewall - deliberately the
+ * all/unit/status/withdrawal are gated on block/nvq_matrix:viewall - deliberately the
  * same capability that already governs staff-side visibility of the
  * live matrix, not a narrower per-field capability (:grade/:sample/
  * :iqacomment) - history is read-only, and anyone who can already see a
@@ -72,14 +80,14 @@ try {
     die();
 }
 
-$action    = required_param('action', PARAM_ALPHA); // 'unit' | 'status' | 'delete'
+$action    = required_param('action', PARAM_ALPHA); // 'all' | 'unit' | 'status' | 'withdrawal' | 'delete'
 $studentid = required_param('studentid', PARAM_INT);
 $courseid  = required_param('courseid', PARAM_INT);
 $topicid   = optional_param('topicid', 0, PARAM_INT);
 
 $response = ['success' => false];
 
-if (!in_array($action, ['unit', 'status', 'delete'], true) || $studentid <= 0 || $courseid <= 0) {
+if (!in_array($action, ['all', 'unit', 'status', 'withdrawal', 'delete'], true) || $studentid <= 0 || $courseid <= 0) {
     $response['error'] = get_string('historyerror', 'block_nvq_matrix');
     echo json_encode($response);
     die();
@@ -104,17 +112,21 @@ if ($action === 'delete') {
         die();
     }
 
-    $historytype = required_param('historytype', PARAM_ALPHA); // 'grade' | 'sampling' | 'unitcomment' | 'status'
+    $historytype = required_param('historytype', PARAM_ALPHA); // 'grade' | 'sampling' | 'unitcomment' | 'status' | 'withdrawal' | 'evidencecomment'
     $historyid   = required_param('historyid', PARAM_INT);
 
-    if ($historyid <= 0 || !in_array($historytype, ['grade', 'sampling', 'unitcomment', 'status'], true)) {
+    if ($historyid <= 0 || !in_array($historytype, ['grade', 'sampling', 'unitcomment', 'status', 'withdrawal', 'evidencecomment'], true)) {
         $response['error'] = get_string('historyerror', 'block_nvq_matrix');
         echo json_encode($response);
         die();
     }
 
     try {
-        $deleted = matrix_data::delete_history_entry($historytype, $historyid, $studentid, $courseid);
+        // Withdrawal log entries have their own delete (they have their
+        // own table and no liverowid).
+        $deleted = ($historytype === 'withdrawal')
+            ? matrix_data::delete_withdrawal_entry($historyid, $studentid, $courseid)
+            : matrix_data::delete_history_entry($historytype, $historyid, $studentid, $courseid);
         $response['success'] = $deleted;
         if (!$deleted) {
             $response['error'] = get_string('historyerror', 'block_nvq_matrix');
@@ -165,13 +177,24 @@ if (!$coursecontext
 }
 
 try {
-    if ($action === 'unit') {
+    if ($action === 'all') {
+        // Single History panel (v26.6.30) - everything for this learner
+        // on this course in one response, same :viewall + group-isolation
+        // gate as above (IOMAD fork).
+        $response['success'] = true;
+        $response['history'] = matrix_data::get_course_history($studentid, $courseid);
+    } else if ($action === 'unit') {
         $unithistory = matrix_data::get_unit_history($topicid, $studentid, $courseid);
         $samplinghistory = matrix_data::get_sampling_history($topicid, $studentid, $courseid);
         $response['success']     = true;
         $response['grade']       = $unithistory['grade'];
         $response['unitcomment'] = $unithistory['unitcomment'];
         $response['sampling']    = $samplinghistory;
+    } else if ($action === 'withdrawal') {
+        // Enrolment status log (v26.6.29) - same :viewall + group-isolation
+        // gate as above (IOMAD fork).
+        $response['success']    = true;
+        $response['withdrawal'] = matrix_data::get_withdrawal_log($studentid, $courseid);
     } else {
         $response['success'] = true;
         $response['status']  = matrix_data::get_status_history($studentid, $courseid);

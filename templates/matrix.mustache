@@ -12,15 +12,24 @@
     @license   http://www.gnu.org/copyleft/gpl.html GNU GPL v3 or later
 }}
 
-<div class="block-nvq-matrix" data-gradeurl="{{gradeurl}}" data-sampleurl="{{sampleurl}}" data-unitcommenturl="{{unitcommenturl}}" data-historyurl="{{historyurl}}" data-issiteadmin="{{issiteadmin}}" data-sesskey="{{sesskey}}">
+<div class="block-nvq-matrix" data-focusunit="{{focusunit}}" data-gradeurl="{{gradeurl}}" data-sampleurl="{{sampleurl}}" data-unitcommenturl="{{unitcommenturl}}" data-historyurl="{{historyurl}}" data-issiteadmin="{{issiteadmin}}" data-sesskey="{{sesskey}}">
 
-    {{#caneditanything}}
+    {{#showtoolbar}}
     {{! Single global toggle: everything that's editable (comments,
         evidence type) renders as plain text until this is clicked, then
         every field on the page becomes editable at once — no per-field
         edit icons. Individual fields still save themselves as normal
         (on blur / on change), this button only controls visibility. }}
+    {{! v26.6.30: the toolbar also holds the single History button - all
+        of this learner's history for this course in one panel (Enrolment
+        status, Final status, then each unit), replacing the separate
+        History buttons that used to sit on every unit, Final status and
+        the Enrolment status strip. Fetched from history.php?action=all
+        the first time it is opened. Site admins get Delete on every
+        entry. Shown to anyone with :viewall, matching history.php. }}
+    <div class="nvq-history-wrap nvq-history-wrap--all" data-historykind="all" data-studentid="{{historystudentid}}" data-courseid="{{historycourseid}}">
     <div class="nvq-editmode-bar">
+        {{#caneditanything}}
         <button type="button" class="btn btn-outline-secondary btn-sm nvq-editmode-toggle" aria-pressed="false">
             <span class="nvq-editmode-toggle-icon" aria-hidden="true">
                 <svg viewBox="0 0 16 16" width="13" height="13" focusable="false">
@@ -31,8 +40,35 @@
                   data-editlabel="{{#str}}editmatrix, block_nvq_matrix{{/str}}"
                   data-donelabel="{{#str}}doneediting, block_nvq_matrix{{/str}}">{{#str}}editmatrix, block_nvq_matrix{{/str}}</span>
         </button>
+        {{/caneditanything}}
+        {{#showhistory}}
+        <button type="button" class="btn btn-outline-secondary btn-sm nvq-history-toggle nvq-history-toggle--all" aria-expanded="false">
+            <svg viewBox="0 0 16 16" width="13" height="13" focusable="false" aria-hidden="true">
+                <path fill="currentColor" d="M8 3.5a.5.5 0 0 1 .5.5v4.2l2.646 1.53a.5.5 0 0 1-.5.866l-2.896-1.674A.5.5 0 0 1 7.5 8.5V4a.5.5 0 0 1 .5-.5z"/>
+                <path fill="currentColor" d="M8 15A7 7 0 1 1 8 1a7 7 0 0 1 0 14zm0-1A6 6 0 1 0 8 2a6 6 0 0 0 0 12z"/>
+            </svg>
+            {{#str}}historybutton, block_nvq_matrix{{/str}}
+        </button>
+        {{/showhistory}}
     </div>
-    {{/caneditanything}}
+    {{#showhistory}}
+    <div class="nvq-history-panel nvq-history-panel--all"
+         hidden
+         data-loadingtext="{{#str}}loading, moodle{{/str}}"
+         data-nonetext="{{#str}}historynone, block_nvq_matrix{{/str}}"
+         data-errortext="{{#str}}historyerror, block_nvq_matrix{{/str}}"
+         data-enrolmentlabel="{{#str}}withdrawalheading, block_nvq_matrix{{/str}}"
+         data-finalstatuslabel="{{#str}}finalstatusheading, block_nvq_matrix{{/str}}"
+         data-gradelabel="{{#str}}historygradelabel, block_nvq_matrix{{/str}}"
+         data-samplinglabel="{{#str}}historysamplinglabel, block_nvq_matrix{{/str}}"
+         data-commentlabel="{{#str}}historyunitcommentlabel, block_nvq_matrix{{/str}}"
+         data-evidencecommentlabel="{{#str}}historyevidencecommentlabel, block_nvq_matrix{{/str}}"
+         data-deletebtntext="{{#str}}historydeletebtn, block_nvq_matrix{{/str}}"
+         data-deleteconfirmtext="{{#str}}historydeleteconfirm, block_nvq_matrix{{/str}}"
+         data-deleteerrortext="{{#str}}historydeleteerror, block_nvq_matrix{{/str}}"></div>
+    {{/showhistory}}
+    </div>
+    {{/showtoolbar}}
 
 
     {{! Student selector }}
@@ -67,6 +103,43 @@
     </div>
     {{/showcourseswitcher}}
 
+    {{! Withdrawn status (v26.6.28, layout revised v26.6.29).
+        Status and action are deliberately separate:
+        - This strip only SHOWS the learner's enrolment status (Active /
+          Withdrawn, plus the latest change when withdrawn) - read-only,
+          always visible to staff while the learner is enrolled here.
+        - The Withdraw / Reinstate ACTION lives in its own box beside
+          Final status further down, revealed only in Edit matrix mode,
+          like every other change on this page.
+        The banner is only for viewers who do not get the strip (the
+        learner themselves, or a withdrawn learner no longer enrolled). }}
+    {{#showwithdrawnbanner}}
+    <div class="nvq-withdrawn-banner" role="status">{{withdrawnbannertext}}</div>
+    {{/showwithdrawnbanner}}
+
+    {{#showwithdrawpanel}}
+    <div class="nvq-withdraw-panel">
+        <div class="nvq-withdraw-head">
+            <span class="nvq-withdraw-title">{{#str}}withdrawalheading, block_nvq_matrix{{/str}}</span>
+            {{#iswithdrawn}}
+            <span class="nvq-withdraw-badge nvq-withdraw-badge--withdrawn">{{#str}}withdrawnstate, block_nvq_matrix{{/str}}</span>
+            {{#haslatestwithdrawal}}<span class="nvq-withdraw-latest">{{latestwithdrawal}}</span>{{/haslatestwithdrawal}}
+            {{/iswithdrawn}}
+            {{^iswithdrawn}}
+            {{#iscompleted}}
+            <span class="nvq-withdraw-badge nvq-withdraw-badge--active">{{#str}}completedstate, block_nvq_matrix{{/str}}</span>
+            {{/iscompleted}}
+            {{^iscompleted}}
+            <span class="nvq-withdraw-badge nvq-withdraw-badge--active">{{#str}}activestate, block_nvq_matrix{{/str}}</span>
+            {{/iscompleted}}
+            {{/iswithdrawn}}
+        </div>
+        {{#iswithdrawn}}
+        <div class="nvq-withdraw-locknote">{{withdrawlocknote}}</div>
+        {{/iswithdrawn}}
+    </div>
+    {{/showwithdrawpanel}}
+
     {{! Assessment Plan / Sampling Plan / Sampling Record links, one panel
         per course this student's matrix touches. Only present when
         local_nvqportfolio is installed and configured for that course —
@@ -78,9 +151,32 @@
             <a href="{{assessmentplanurl}}" class="nvq-portfolio-link" target="_blank" rel="noopener noreferrer">{{#str}}assessmentplan, block_nvq_matrix{{/str}}</a>
             <a href="{{samplingplanurl}}" class="nvq-portfolio-link" target="_blank" rel="noopener noreferrer">{{#str}}samplingplan, block_nvq_matrix{{/str}}</a>
             <a href="{{samplingrecordurl}}" class="nvq-portfolio-link" target="_blank" rel="noopener noreferrer">{{#str}}samplingrecord, block_nvq_matrix{{/str}}</a>
+            {{#pfhasqalearner}}
+            <a href="{{pfqalearnerurl}}" class="nvq-portfolio-link nvq-qa-matrixlink">{{#str}}qabutton, block_nvq_matrix{{/str}}{{#pfqasummarytext}}<span class="nvq-qa-matrixbadge">{{pfqasummarytext}}</span>{{/pfqasummarytext}}</a>
+            {{/pfhasqalearner}}
+            {{#pfhasqatracker}}
+            <a href="{{pfqatrackerurl}}" class="nvq-portfolio-link nvq-qa-matrixlink">{{#str}}qatrackerbutton, block_nvq_matrix{{/str}}{{#pfqapending}}<span class="nvq-qa-matrixbadge">{{pfqapending}}</span>{{/pfqapending}}</a>
+            {{/pfhasqatracker}}
         </div>
     </div>
     {{/portfoliolinks}}
+
+    {{! Quality Assurance documents (v26.7.1): a link to this learner's
+        QA checklist for the course being viewed (with their progress)
+        and, for staff, the course tracker. Built in view.php. }}
+    {{#showqapanel}}
+    <div class="nvq-portfolio-panel nvq-qa-matrixpanel">
+        <div class="nvq-portfolio-coursename">{{qacoursename}}</div>
+        <div class="nvq-portfolio-links">
+            {{#hasqalearner}}
+            <a href="{{qalearnerurl}}" class="nvq-portfolio-link nvq-qa-matrixlink">{{#str}}qabutton, block_nvq_matrix{{/str}}{{#qasummarytext}}<span class="nvq-qa-matrixbadge">{{qasummarytext}}</span>{{/qasummarytext}}</a>
+            {{/hasqalearner}}
+            {{#hasqatracker}}
+            <a href="{{qatrackerurl}}" class="nvq-portfolio-link nvq-qa-matrixlink">{{#str}}qatrackerbutton, block_nvq_matrix{{/str}}{{#qapending}}<span class="nvq-qa-matrixbadge">{{qapending}}</span>{{/qapending}}</a>
+            {{/hasqatracker}}
+        </div>
+    </div>
+    {{/showqapanel}}
 
     {{! Compact dashboard row — small circular Gap Analysis stat tile and
         the Export Portfolio action, grouped together above Overall/
@@ -256,7 +352,7 @@
                             {{#haseevidence}}
                             <ul class="nvq-evidence-list list-unstyled mb-0">
                                 {{#items}}
-                                <li class="nvq-evidence-item">
+                                <li class="nvq-evidence-item" data-evidenceitemid="{{itemid}}">
                                     <div class="nvq-evidence-item-main">
                                         {{#caneditevidencetype}}
                                         <div class="nvq-evidencetype-wrap">
@@ -568,43 +664,6 @@
 
             </div>
 
-            {{! ── History — on-demand only, fetched via history.php the
-                 first time it's opened (see initHistoryToggles() below),
-                 never rendered server-side. Covers grade verdict/comment,
-                 sampling status, and IQA comment together for this one
-                 unit, since all three live in the same unit card and a
-                 reviewer checking one is usually checking all three.
-                 Gated on canviewall, matching history.php's own
-                 capability requirement (:viewall) exactly, so the button
-                 never appears for someone who couldn't successfully call
-                 the endpoint anyway. Added v26.6.16 as the first
-                 user-facing surface for the audit trail built in
-                 v26.6.13. ── }}
-            {{#canviewall}}
-            <div class="nvq-history-wrap" data-topicid="{{topicid}}" data-studentid="{{studentid}}" data-courseid="{{courseid}}">
-                <button type="button" class="nvq-history-toggle" aria-expanded="false"
-                        aria-label="{{#str}}historybutton, block_nvq_matrix{{/str}}"
-                        title="{{#str}}historybutton, block_nvq_matrix{{/str}}">
-                    <svg viewBox="0 0 16 16" width="13" height="13" focusable="false" aria-hidden="true">
-                        <path fill="currentColor" d="M8 3.5a.5.5 0 0 1 .5.5v4.2l2.646 1.53a.5.5 0 0 1-.5.866l-2.896-1.674A.5.5 0 0 1 7.5 8.5V4a.5.5 0 0 1 .5-.5z"/>
-                        <path fill="currentColor" d="M8 15A7 7 0 1 1 8 1a7 7 0 0 1 0 14zm0-1A6 6 0 1 0 8 2a6 6 0 0 0 0 12z"/>
-                    </svg>
-                    {{#str}}historybutton, block_nvq_matrix{{/str}}
-                </button>
-                <div class="nvq-history-panel"
-                     hidden
-                     data-loadingtext="{{#str}}loading, moodle{{/str}}"
-                     data-nonetext="{{#str}}historynone, block_nvq_matrix{{/str}}"
-                     data-errortext="{{#str}}historyerror, block_nvq_matrix{{/str}}"
-                     data-gradelabel="{{#str}}historygradelabel, block_nvq_matrix{{/str}}"
-                     data-samplinglabel="{{#str}}historysamplinglabel, block_nvq_matrix{{/str}}"
-                     data-commentlabel="{{#str}}historyunitcommentlabel, block_nvq_matrix{{/str}}"
-                     data-deletebtntext="{{#str}}historydeletebtn, block_nvq_matrix{{/str}}"
-                     data-deleteconfirmtext="{{#str}}historydeleteconfirm, block_nvq_matrix{{/str}}"
-                     data-deleteerrortext="{{#str}}historydeleteerror, block_nvq_matrix{{/str}}"></div>
-            </div>
-            {{/canviewall}}
-
         </div>
 
     </div>
@@ -682,36 +741,54 @@
         {{#hasbeennotified}}
         <div class="nvq-finalstatus-meta">{{notifiedinfo}}</div>
         {{/hasbeennotified}}
-
-        {{! See the unit-level History toggle's own comment above for the
-            full design rationale - identical here, just for the course's
-            final status instead of one unit. No topicid attribute at
-            all (deliberately, not left empty) - the JS below uses its
-            presence/absence to decide which history.php action to
-            request. }}
-        {{#canviewall}}
-        <div class="nvq-history-wrap" data-studentid="{{studentid}}" data-courseid="{{courseid}}">
-            <button type="button" class="nvq-history-toggle" aria-expanded="false"
-                    aria-label="{{#str}}historybutton, block_nvq_matrix{{/str}}"
-                    title="{{#str}}historybutton, block_nvq_matrix{{/str}}">
-                <svg viewBox="0 0 16 16" width="13" height="13" focusable="false" aria-hidden="true">
-                    <path fill="currentColor" d="M8 3.5a.5.5 0 0 1 .5.5v4.2l2.646 1.53a.5.5 0 0 1-.5.866l-2.896-1.674A.5.5 0 0 1 7.5 8.5V4a.5.5 0 0 1 .5-.5z"/>
-                    <path fill="currentColor" d="M8 15A7 7 0 1 1 8 1a7 7 0 0 1 0 14zm0-1A6 6 0 1 0 8 2a6 6 0 0 0 0 12z"/>
-                </svg>
-                {{#str}}historybutton, block_nvq_matrix{{/str}}
-            </button>
-            <div class="nvq-history-panel"
-                 hidden
-                 data-loadingtext="{{#str}}loading, moodle{{/str}}"
-                 data-nonetext="{{#str}}historynone, block_nvq_matrix{{/str}}"
-                 data-errortext="{{#str}}historyerror, block_nvq_matrix{{/str}}"
-                 data-deletebtntext="{{#str}}historydeletebtn, block_nvq_matrix{{/str}}"
-                 data-deleteconfirmtext="{{#str}}historydeleteconfirm, block_nvq_matrix{{/str}}"
-                 data-deleteerrortext="{{#str}}historydeleteerror, block_nvq_matrix{{/str}}"></div>
-        </div>
-        {{/canviewall}}
     </div>
     {{/finalstatusboxes}}
+
+    {{! Enrolment status ACTION box (v26.6.29) - same level as Final
+        status, since withdrawing is a decision about the learner's place
+        on the course as a whole. Only rendered for a viewer who can act
+        (block/nvq_matrix:withdraw), and only visible in Edit matrix mode
+        (see styles.css). The page-level Edit matrix button is kept
+        available for these viewers even while the matrix is locked, so
+        Reinstate can always be reached (see view.php). }}
+    {{#canwithdraw}}
+    <div class="nvq-finalstatus-box nvq-withdraw-box"
+         data-withdrawurl="{{withdrawurl}}"
+         data-studentid="{{withdrawstudentid}}"
+         data-courseid="{{withdrawcourseid}}">
+        <div class="nvq-finalstatus-header">
+            <span class="nvq-finalstatus-title">{{#str}}withdrawalheading, block_nvq_matrix{{/str}}</span>
+            <span class="nvq-finalstatus-course">{{withdrawcoursename}}</span>
+        </div>
+        <div class="nvq-finalstatus-body">
+            {{#iswithdrawn}}
+            <span class="nvq-finalstatus-badge nvq-withdraw-badge--withdrawn">{{#str}}withdrawnstate, block_nvq_matrix{{/str}}</span>
+            <button type="button" class="btn btn-sm btn-outline-primary nvq-withdraw-action"
+                    data-action="reinstate" data-confirm="{{reinstateconfirm}}">{{#str}}reinstatebutton, block_nvq_matrix{{/str}}</button>
+            {{/iswithdrawn}}
+            {{^iswithdrawn}}
+            {{#iscompleted}}
+            <span class="nvq-finalstatus-badge nvq-finalstatus-badge--pass">{{#str}}completedstate, block_nvq_matrix{{/str}}</span>
+            {{/iscompleted}}
+            {{^iscompleted}}
+            <span class="nvq-finalstatus-badge nvq-finalstatus-badge--pass">{{#str}}activestate, block_nvq_matrix{{/str}}</span>
+            <button type="button" class="btn btn-sm btn-outline-danger nvq-withdraw-action"
+                    data-action="withdraw" data-confirm="{{withdrawconfirm}}">{{#str}}withdrawbutton, block_nvq_matrix{{/str}}</button>
+            {{/iscompleted}}
+            {{/iswithdrawn}}
+            {{^iscompleted}}
+            <div class="nvq-finalstatus-date-row">
+                <label class="nvq-comment-date-label" for="nvq-withdraw-date">{{#str}}withdrawaldate, block_nvq_matrix{{/str}}</label>
+                <input type="date" id="nvq-withdraw-date"
+                       class="nvq-comment-date-input nvq-withdraw-date form-control form-control-sm"
+                       value="{{withdrawdateiso}}"
+                       title="{{#str}}withdrawaldatehelp, block_nvq_matrix{{/str}}">
+            </div>
+            {{/iscompleted}}
+            <span class="nvq-withdraw-status" aria-live="polite"></span>
+        </div>
+    </div>
+    {{/canwithdraw}}
 
 </div>
 
@@ -1177,6 +1254,7 @@ function nvqToggleGapMode(matrix, toggleBtn) {
         initStudentPicker(matrix);
         initHistoryToggles(matrix);
         initHistoryDelete(matrix);
+        initWithdrawPanel(matrix);
 
         matrix.addEventListener('click', function (e) {
             var btn = e.target.closest('.nvq-grade-btn');
@@ -2439,7 +2517,10 @@ function nvqToggleGapMode(matrix, toggleBtn) {
             panel.hidden = !opening;
             toggle.setAttribute('aria-expanded', opening ? 'true' : 'false');
 
-            if (opening && wrap.dataset.loaded !== '1') {
+            // The single History panel (v26.6.30) is fetched fresh every
+            // time it is opened, so changes made on the page since it was
+            // last opened always show.
+            if (opening && (wrap.dataset.loaded !== '1' || wrap.dataset.historykind === 'all')) {
                 loadHistory(matrix, wrap, panel);
             }
         });
@@ -2457,13 +2538,14 @@ function nvqToggleGapMode(matrix, toggleBtn) {
         var studentid  = wrap.dataset.studentid;
         var courseid   = wrap.dataset.courseid;
         var topicid    = wrap.dataset.topicid;
+        var kind       = wrap.dataset.historykind || '';
 
         if (!historyurl || !studentid || !courseid) { return; }
 
         panel.innerHTML = '<div class="nvq-history-loading">' + escapeHtml(panel.dataset.loadingtext) + '</div>';
 
         var body = new URLSearchParams({
-            action    : topicid ? 'unit' : 'status',
+            action    : (kind === 'all' || kind === 'withdrawal') ? kind : (topicid ? 'unit' : 'status'),
             studentid : studentid,
             courseid  : courseid,
             sesskey   : sesskey,
@@ -2483,7 +2565,13 @@ function nvqToggleGapMode(matrix, toggleBtn) {
                 return;
             }
             wrap.dataset.loaded = '1';
-            panel.innerHTML = topicid ? renderUnitHistory(data, matrix, wrap, panel) : renderStatusHistory(data, matrix, wrap, panel);
+            if (kind === 'all') {
+                panel.innerHTML = renderAllHistory(data.history || {}, matrix, wrap, panel);
+            } else if (kind === 'withdrawal') {
+                panel.innerHTML = renderWithdrawalHistory(data, matrix, wrap, panel);
+            } else {
+                panel.innerHTML = topicid ? renderUnitHistory(data, matrix, wrap, panel) : renderStatusHistory(data, matrix, wrap, panel);
+            }
         })
         .catch(function () {
             panel.innerHTML = '<div class="nvq-history-error">' + escapeHtml(panel.dataset.errortext) + '</div>';
@@ -2503,10 +2591,12 @@ function nvqToggleGapMode(matrix, toggleBtn) {
      * is_siteadmin() independently), since this client-side check is
      * only ever a display convenience, never the real gate.
      */
-    function historyDeleteButton(matrix, wrap, panel, historytype, historyid) {
+    function historyDeleteButton(matrix, wrap, panel, historytype, historyid, confirmtext) {
         if (matrix.dataset.issiteadmin !== '1') { return ''; }
         return '<button type="button" class="nvq-history-delete-btn" data-historytype="' + escapeHtml(historytype)
-            + '" data-historyid="' + escapeHtml(historyid) + '">' + escapeHtml(panel.dataset.deletebtntext) + '</button>';
+            + '" data-historyid="' + escapeHtml(historyid) + '"'
+            + (confirmtext ? ' data-confirm="' + escapeHtml(confirmtext) + '"' : '')
+            + '>' + escapeHtml(panel.dataset.deletebtntext) + '</button>';
     }
 
     /**
@@ -2583,6 +2673,112 @@ function nvqToggleGapMode(matrix, toggleBtn) {
     }
 
     /**
+     * Enrolment status log (v26.6.29). Each entry is already a complete
+     * line ("Withdrawn 01/02/2026 by Name"). Since v26.6.30 a site admin
+     * can delete every entry; one whose deletion would change the
+     * learner's current status carries its own warning (row.confirm),
+     * and deleting it reloads the page so the lock state is redrawn.
+     */
+    function renderWithdrawalEntries(rows, matrix, wrap, panel) {
+        var html = '';
+        rows.forEach(function (row) {
+            html += '<div class="nvq-history-entry">'
+                + '<span class="nvq-history-entry-value">' + escapeHtml(row.text) + '</span>'
+                + historyDeleteButton(matrix, wrap, panel, 'withdrawal', row.id, row.confirm || '')
+                + '</div>';
+        });
+        return html;
+    }
+
+    function renderWithdrawalHistory(data, matrix, wrap, panel) {
+        if (!data.withdrawal || !data.withdrawal.length) {
+            return historyEmptyRow(panel);
+        }
+        return renderWithdrawalEntries(data.withdrawal, matrix, wrap, panel);
+    }
+
+    /**
+     * Single History panel (v26.6.30): everything for this learner on
+     * this course. Sections appear only when they have entries; units
+     * are listed in matrix order with a sub-heading per field.
+     */
+    function renderAllHistory(h, matrix, wrap, panel) {
+        var html = '';
+        var enrolment = h.enrolment || [];
+        var finalstatus = h.finalstatus || [];
+        var units = h.units || [];
+
+        function section(title, body) {
+            return '<div class="nvq-history-section"><div class="nvq-history-section-title">'
+                + escapeHtml(title) + '</div>' + body + '</div>';
+        }
+        function sub(title, body) {
+            return '<div class="nvq-history-sub"><div class="nvq-history-sub-title">'
+                + escapeHtml(title) + '</div>' + body + '</div>';
+        }
+
+        if (enrolment.length) {
+            html += section(panel.dataset.enrolmentlabel, renderWithdrawalEntries(enrolment, matrix, wrap, panel));
+        }
+        if (finalstatus.length) {
+            html += section(panel.dataset.finalstatuslabel, renderStatusHistory({status: finalstatus}, matrix, wrap, panel));
+        }
+
+        units.forEach(function (unit) {
+            var body = '';
+            if (unit.grade && unit.grade.length) {
+                var g = '';
+                unit.grade.forEach(function (row) {
+                    g += '<div class="nvq-history-entry">'
+                        + '<span class="nvq-history-entry-value">' + escapeHtml(row.valuetext) + '</span>'
+                        + (row.comment ? '<div class="nvq-history-entry-comment">' + escapeHtml(row.comment) + '</div>' : '')
+                        + historyMetaLine(row, panel)
+                        + historyDeleteButton(matrix, wrap, panel, 'grade', row.id)
+                        + '</div>';
+                });
+                body += sub(panel.dataset.gradelabel, g);
+            }
+            if (unit.sampling && unit.sampling.length) {
+                var sm = '';
+                unit.sampling.forEach(function (row) {
+                    sm += '<div class="nvq-history-entry">'
+                        + '<span class="nvq-history-entry-value">' + escapeHtml(row.statustext) + '</span>'
+                        + historyMetaLine(row, panel)
+                        + historyDeleteButton(matrix, wrap, panel, 'sampling', row.id)
+                        + '</div>';
+                });
+                body += sub(panel.dataset.samplinglabel, sm);
+            }
+            if (unit.unitcomment && unit.unitcomment.length) {
+                var uc = '';
+                unit.unitcomment.forEach(function (row) {
+                    uc += '<div class="nvq-history-entry">'
+                        + '<div class="nvq-history-entry-comment">' + escapeHtml(row.comment) + '</div>'
+                        + historyMetaLine(row, panel)
+                        + historyDeleteButton(matrix, wrap, panel, 'unitcomment', row.id)
+                        + '</div>';
+                });
+                body += sub(panel.dataset.commentlabel, uc);
+            }
+            if (unit.evidencecomment && unit.evidencecomment.length) {
+                var ec = '';
+                unit.evidencecomment.forEach(function (row) {
+                    ec += '<div class="nvq-history-entry">'
+                        + (row.itemname ? '<span class="nvq-history-entry-value">' + escapeHtml(row.itemname) + '</span>' : '')
+                        + '<div class="nvq-history-entry-comment">' + escapeHtml(row.comment) + '</div>'
+                        + historyMetaLine(row, panel)
+                        + historyDeleteButton(matrix, wrap, panel, 'evidencecomment', row.id)
+                        + '</div>';
+                });
+                body += sub(panel.dataset.evidencecommentlabel, ec);
+            }
+            html += section(unit.title, body);
+        });
+
+        return html || historyEmptyRow(panel);
+    }
+
+    /**
      * "Set by X, DD/MM/YYYY" - the byline shown for every history entry.
      * Simplified here (v26.6.21) - a previous version also showed a
      * separate "Changed DD/MM/YYYY HH:MM" line using archivedtime.
@@ -2621,7 +2817,7 @@ function nvqToggleGapMode(matrix, toggleBtn) {
             var wrap  = btn.closest('.nvq-history-wrap');
             if (!entry || !panel || !wrap) { return; }
 
-            if (!window.confirm(panel.dataset.deleteconfirmtext)) { return; }
+            if (!window.confirm(btn.dataset.confirm || panel.dataset.deleteconfirmtext)) { return; }
 
             var historyurl = matrix.dataset.historyurl;
             var sesskey    = matrix.dataset.sesskey;
@@ -2648,7 +2844,32 @@ function nvqToggleGapMode(matrix, toggleBtn) {
             .then(function (r) { return r.json(); })
             .then(function (data) {
                 if (data.success) {
+                    if (btn.dataset.historytype === 'withdrawal') {
+                        // Deleting an enrolment entry can change the
+                        // learner's status (and so the lock) and the
+                        // latest line on the strip - redraw the page.
+                        reloadPreservingEditMode(wrap);
+                        return;
+                    }
+                    var list = entry.parentNode;
                     entry.remove();
+                    // Tidy up: drop a field heading, then a unit/section,
+                    // once its last entry has gone.
+                    var subEl = list && list.closest ? list.closest('.nvq-history-sub') : null;
+                    if (subEl && !subEl.querySelector('.nvq-history-entry')) {
+                        var sectionEl = subEl.closest('.nvq-history-section');
+                        subEl.remove();
+                        if (sectionEl && !sectionEl.querySelector('.nvq-history-entry')) { sectionEl.remove(); }
+                    } else {
+                        var sec = list && list.closest ? list.closest('.nvq-history-section') : null;
+                        if (sec && sec.closest('.nvq-history-panel--all') && !sec.querySelector('.nvq-history-entry')) {
+                            sec.remove();
+                        }
+                    }
+                    var allpanel = panel.classList.contains('nvq-history-panel--all') ? panel : null;
+                    if (allpanel && !allpanel.querySelector('.nvq-history-entry')) {
+                        allpanel.innerHTML = historyEmptyRow(allpanel);
+                    }
                 } else {
                     window.alert(data.error || panel.dataset.deleteerrortext);
                     btn.disabled = false;
@@ -2672,6 +2893,65 @@ function nvqToggleGapMode(matrix, toggleBtn) {
         return div.innerHTML;
     }
 
+    /**
+     * Withdraw / Reinstate (v26.6.28; box moved beside Final status and
+     * shown only in Edit matrix mode in v26.6.29). Confirms, posts to
+     * withdraw.php, then reloads the page - withdrawal locks or unlocks the whole
+     * matrix, so a fresh render is simpler and safer than patching
+     * every control in place.
+     */
+    function initWithdrawPanel(matrix) {
+        var panel = matrix.querySelector('.nvq-withdraw-box');
+        if (!panel) { return; }
+
+        panel.addEventListener('click', function (e) {
+            var btn = e.target.closest('.nvq-withdraw-action');
+            if (!btn || btn.disabled) { return; }
+
+            if (!window.confirm(btn.dataset.confirm)) { return; }
+
+            var dateinput = panel.querySelector('.nvq-withdraw-date');
+            var statusEl  = panel.querySelector('.nvq-withdraw-status');
+            btn.disabled = true;
+
+            var body = new URLSearchParams({
+                studentid  : panel.dataset.studentid,
+                courseid   : panel.dataset.courseid,
+                action     : btn.dataset.action,
+                actiondate : dateinput ? (dateinput.value || '') : '',
+                sesskey    : matrix.dataset.sesskey,
+            });
+
+            fetch(panel.dataset.withdrawurl, {
+                method      : 'POST',
+                credentials : 'same-origin',
+                headers     : { 'Content-Type': 'application/x-www-form-urlencoded' },
+                body        : body.toString(),
+            })
+            .then(function (r) { return r.json(); })
+            .then(function (data) {
+                if (data.success) {
+                    // Stay in Edit matrix mode after the reload, so the
+                    // Reinstate/Withdraw box is still in view.
+                    reloadPreservingEditMode(panel);
+                    return;
+                }
+                if (statusEl) {
+                    statusEl.textContent = data.error || 'Error';
+                    statusEl.className = 'nvq-withdraw-status nvq-grade-error';
+                }
+                btn.disabled = false;
+            })
+            .catch(function () {
+                if (statusEl) {
+                    statusEl.textContent = 'Error';
+                    statusEl.className = 'nvq-withdraw-status nvq-grade-error';
+                }
+                btn.disabled = false;
+            });
+        });
+    }
+
     // Init after DOM ready.
     if (document.readyState === 'loading') {
         document.addEventListener('DOMContentLoaded', initGrading);
@@ -2679,4 +2959,64 @@ function nvqToggleGapMode(matrix, toggleBtn) {
         initGrading();
     }
 }());
+</script>
+
+{{! v26.7.3: deep links from the Alex D&D dashboard. ?unit=<topicid> opens and
+    highlights that unit; #history opens the History panel; #item-<itemid>
+    opens the unit holding that evidence item and highlights it. Runs after
+    the page's own scripts have wired the History toggle (window load). }}
+<script>
+(function () {
+    'use strict';
+    function openCard(card) {
+        if (!card) { return; }
+        var header = card.querySelector('.nvq-unit-header');
+        if (header && header.getAttribute('aria-expanded') !== 'true') {
+            nvqToggleUnit(header);
+        }
+    }
+    function focusFromLink() {
+        var matrix = document.querySelector('.block-nvq-matrix');
+        if (!matrix) { return; }
+        var target = null;
+        var hash = window.location.hash || '';
+
+        var unitid = parseInt(matrix.dataset.focusunit || '0', 10);
+        if (unitid) {
+            var card = matrix.querySelector('.nvq-unit-card[data-topicid="' + unitid + '"]');
+            if (card) {
+                openCard(card);
+                card.classList.add('nvq-unit-card--focus');
+                target = card;
+            }
+        }
+
+        var itemmatch = hash.match(/^#item-(\d+)$/);
+        if (itemmatch) {
+            var item = matrix.querySelector('.nvq-evidence-item[data-evidenceitemid="' + itemmatch[1] + '"]');
+            if (item) {
+                openCard(item.closest('.nvq-unit-card'));
+                item.classList.add('nvq-evidence-item--focus');
+                target = item;
+            }
+        }
+
+        if (hash === '#history') {
+            var toggle = matrix.querySelector('.nvq-history-toggle--all');
+            if (toggle && toggle.getAttribute('aria-expanded') !== 'true') {
+                toggle.click();
+            }
+            target = toggle ? toggle.closest('.nvq-history-wrap') : target;
+        }
+
+        if (target) {
+            target.scrollIntoView({block: 'start', behavior: 'smooth'});
+        }
+    }
+    if (document.readyState === 'complete') {
+        focusFromLink();
+    } else {
+        window.addEventListener('load', focusFromLink);
+    }
+})();
 </script>

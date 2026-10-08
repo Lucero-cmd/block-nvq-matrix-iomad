@@ -152,6 +152,10 @@ try {
 
         if (!empty($commentids)) {
             list($commentinsql, $commentparams) = $DB->get_in_or_equal($commentids, SQL_PARAMS_NAMED, 'delcm');
+            // Keep the comments in their history first (v26.6.30), the
+            // same way grades and the rest are kept above.
+            \block_nvq_matrix\matrix_data::snapshot_evidence_comments_before_delete($commentids);
+
             // Child table first - evidence_types has no ON DELETE
             // CASCADE of its own in install.xml, so leaving this out
             // would strand orphaned type rows pointing at a deleted

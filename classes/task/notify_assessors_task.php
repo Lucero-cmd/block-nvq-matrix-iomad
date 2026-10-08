@@ -116,12 +116,19 @@ class notify_assessors_task extends \core\task\scheduled_task {
         // student-driven submissions, matching the original "when a
         // student makes a submission" requirement, rather than firing
         // for every write to this shared table regardless of origin.
+        // v26.6.26: "made by the learner themselves" is now matched as
+        // role = 0 (Exabis ePortfolio's original convention) OR
+        // reviewerid = userid. An ePortfolio update in September 2026 began
+        // recording learner-made links with role = 1, which this filter then
+        // silently skipped - see version.php's v26.6.26 entry. Checking who
+        // actually made the link keeps working whatever role number
+        // ePortfolio uses, while still excluding staff-made links.
         $sql = "SELECT mm.id, mm.activityid, mm.userid
                   FROM {block_exacompcompuser_mm} mm
                  WHERE mm.id > :lastid
                    AND mm.id <= :maxid
                    AND mm.eportfolioitem = 1
-                   AND mm.role = 0
+                   AND (mm.role = 0 OR mm.reviewerid = mm.userid)
               ORDER BY mm.id ASC";
         $rows = $DB->get_records_sql($sql, ['lastid' => $lastid, 'maxid' => $maxid]);
 

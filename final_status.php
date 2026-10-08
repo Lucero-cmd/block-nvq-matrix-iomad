@@ -112,6 +112,18 @@ if (!$coursecontext
 // breaks the client's response parsing.
 $PAGE->set_context($coursecontext);
 
+// Withdrawn lock (v26.6.28): a learner marked withdrawn from this course
+// has their matrix locked for everyone until reinstated - enforced here,
+// not just by hiding the controls in the page. Applies to all three
+// actions (set/clear/notify) - a withdrawn learner's final status is
+// frozen along with everything else until reinstated.
+if (\block_nvq_matrix\matrix_data::is_withdrawn($studentid, $courseid)) {
+    http_response_code(403);
+    $response['error'] = get_string('withdrawnlocked', 'block_nvq_matrix');
+    echo json_encode($response);
+    die();
+}
+
 try {
     if ($action === 'set') {
         matrix_data::save_final_status($studentid, $courseid, $status, matrix_data::parse_comment_date($setdatestr));

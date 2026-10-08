@@ -17,6 +17,78 @@
 /**
  * Version metadata for the block_nvq_matrix plugin.
  *
+ * v27.1.0 (1.22.0) — Ports the plain-Moodle source's v1.20.28→v1.25.0
+ *   feature set (alexddelearning.com) onto this IOMAD fork, with the
+ *   multi-tenant isolation guide's group/company scoping threaded
+ *   through every new write/read path (the source has no such
+ *   mechanism at all, and in one place reintroduced a hardcoded
+ *   role-shortname check this fork had already eliminated — see
+ *   below). Schema: 6 new tables (block_nvq_matrix_withdrawals,
+ *   _evcomments_history, _qadocs, _qadoccourses, _qasubs, _qalog), all
+ *   additive, no maintenance window needed.
+ *   - Withdrawn learner status: a new append-only enrolment-status log
+ *     and matrix lock, enforced server-side in every write endpoint
+ *     (grade/sample/evidence_comment/unit_comment/final_status/
+ *     evidence_type.php), not just hidden in the UI. New capability
+ *     block/nvq_matrix:withdraw (editingteacher/manager archetypes;
+ *     also granted to the iqa role and, per a deliberate seat-model
+ *     decision, to both course roles a Company Manager holds on this
+ *     fork - companycourseeditor on their own company's courses and
+ *     companycoursenoneditor on shared courses (confirmed live
+ *     2026-10-08) - so no admin step is needed on either).
+ *     companycoursenoneditor is also granted :viewall (read-only) so it
+ *     can open the matrix and reach the Withdraw box - reverses
+ *     v27.0.4's "no nvq_matrix capability" for that role, by client
+ *     decision. Verified live first: no accessallgroups on that role,
+ *     course 7 forced SEPARATEGROUPS, each Company Manager in only their
+ *     own company's group(s).
+ *   - Unified History panel (history.php action=all): grades,
+ *     sampling, unit/evidence comments, final status, and the new
+ *     withdrawal log together, same block/nvq_matrix:viewall +
+ *     this fork's existing viewer_can_access_student() group gate —
+ *     deliberately NOT relaxed to match the source, which dropped
+ *     that gate entirely in its own rewrite of this endpoint.
+ *   - Quality Assurance documents (qa.php/qa_admin.php/qa_action.php/
+ *     qa_file.php, classes/qa.php, qa_ui.php,
+ *     form/qa_document_form.php): uploads, a 3-tier learner → Assessor
+ *     → IQA signature workflow, and EQA/Company-Manager group-scoped
+ *     visibility. New capabilities block/nvq_matrix:qareview
+ *     (Assessor/IQA/manager/admin) and :qaiqasign (manager/IQA only).
+ *     classes/qa.php::get_viewer_scope() replaces the source's
+ *     hardcoded in_array('companymanager'/'eqa', ...role shortname...)
+ *     check with this fork's two existing, role-agnostic group
+ *     mechanisms: matrix_data::is_group_restricted()/
+ *     get_viewer_group_memberids() for mandatory, fail-closed
+ *     isolation (any accessallgroups-lacking role), and
+ *     get_viewer_inspection_group_memberids() for the voluntary,
+ *     opt-in EQA ad hoc inspection-group pattern (sees everyone when
+ *     ungrouped, not fail-closed — that narrowing is not a security
+ *     boundary). Mandatory isolation is checked BEFORE the source's
+ *     ":qareview holders are never limited" exemption, so an Assessor
+ *     or IQA on a shared course stays confined to their own group (the
+ *     source's order would have let them see and act on every
+ *     company's learners). Every QA page/endpoint routes through this
+ *     one function via qa::get_access(), including the file-download
+ *     endpoint (qa_file.php); the matrix's "awaiting check" count uses
+ *     the same scope.
+ *   - Notifications: matrix_data::get_assessor_recipient_ids() (now
+ *     used for both evidence-upload and QA-upload notifications, per
+ *     the source's v26.6.27 change) and the QA IQA notification only
+ *     notify staff allowed to access that learner
+ *     (viewer_can_access_student()), including the designated-assessor
+ *     fallback - otherwise every company's Assessors/IQAs on a shared
+ *     course would receive each learner's name, course and document
+ *     title. Still selects Assessors by the 'assessor' role shortname,
+ *     as the source does - NOT YET converted to a capability rule.
+ *   - Dashboard deep links: ?unit=<topicid>, #history, #item-<id>
+ *     anchors, handled client-side in matrix.mustache; no new
+ *     isolation surface — downstream of the existing studentid/
+ *     courseid resolution gate.
+ *   - Derived "Completed" status (Pass + not withdrawn) — no new
+ *     column.
+ *   - Removed the short-lived "New evidence" badge (already absent
+ *     from both source and this fork by this point).
+ *
  * v27.0.5 (1.21.5) — URGENT REGRESSION FIX for v27.0.4.
  *   matrix_data::has_student_archetype_role() checked
  *   $role->archetype on objects returned by get_user_roles() - but
@@ -2973,7 +3045,7 @@
 
 defined('MOODLE_INTERNAL') || die();
 
-$plugin->version   = 2026091706;
+$plugin->version   = 2026100506;
 $plugin->requires  = 2024100700; // Moodle 4.5 — floor only, nothing here is version-pinned above that.
 // $plugin->supported deliberately omitted. Setting an upper branch number here
 // (e.g. [405, 501]) only controls a cosmetic "not officially supported"
@@ -2988,4 +3060,4 @@ $plugin->requires  = 2024100700; // Moodle 4.5 — floor only, nothing here is v
 // clear error on upgrade — re-test at that point rather than pre-emptively.
 $plugin->component = 'block_nvq_matrix';
 $plugin->maturity  = MATURITY_STABLE;
-$plugin->release   = '1.21.5';
+$plugin->release   = '1.22.0';

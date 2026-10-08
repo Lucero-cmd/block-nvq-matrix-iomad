@@ -41,7 +41,28 @@
 
 defined('MOODLE_INTERNAL') || die();
 
+// Quality Assurance documents admin page (v26.7.1), listed under
+// Site administration -> Plugins -> Blocks.
+if ($hassiteconfig) {
+    $ADMIN->add('blocksettings', new admin_externalpage(
+        'block_nvq_matrix_qadocs',
+        get_string('qaadmintitle', 'block_nvq_matrix'),
+        new moodle_url('/blocks/nvq_matrix/qa_admin.php'),
+        'moodle/site:config'
+    ));
+}
+
 if ($ADMIN->fulltree) {
+    $settings->add(new admin_setting_description(
+        'block_nvq_matrix/qadocslink',
+        get_string('qaadmintitle', 'block_nvq_matrix'),
+        html_writer::link(
+            new moodle_url('/blocks/nvq_matrix/qa_admin.php'),
+            get_string('qaadminsettingslink', 'block_nvq_matrix'),
+            ['class' => 'btn btn-secondary']
+        )
+    ));
+
     // Default 1 (on) - deliberately matches the plugin's original,
     // already-shipped behaviour (v26.4.22: every write to
     // block_exacompcompuser_mm for an item, including a same-competency
