@@ -61,6 +61,11 @@ $capabilities = [
             'editingteacher'        => CAP_ALLOW,
             'manager'               => CAP_ALLOW,
             'companycourseeditor'   => CAP_ALLOW,
+            // v27.2.0: also declared here so a FRESH install matches an
+            // upgraded site (2026100502 grants it by upgrade step, which a
+            // fresh install never runs). Read-only; the matrix's group
+            // isolation confines it to the manager's own company.
+            'companycoursenoneditor' => CAP_ALLOW,
         ],
     ],
     // Capability to set the per-unit sampling status (Sampled / Not Yet Sampled).
@@ -143,8 +148,12 @@ $capabilities = [
         'captype'      => 'write',
         'contextlevel' => CONTEXT_COURSE,
         'archetypes'   => [
-            'editingteacher' => CAP_ALLOW,
-            'manager'        => CAP_ALLOW,
+            'editingteacher'         => CAP_ALLOW,
+            'manager'                => CAP_ALLOW,
+            // v27.2.0: declared so a fresh install matches an upgraded
+            // site - see the comment above and step 2026100502.
+            'companycourseeditor'    => CAP_ALLOW,
+            'companycoursenoneditor' => CAP_ALLOW,
         ],
     ],
     // Capability to export a single student's full portfolio (matrix
