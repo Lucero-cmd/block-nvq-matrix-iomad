@@ -66,13 +66,36 @@ $PAGE->set_heading(format_string($course->fullname, true, ['context' => $ctx]));
 $PAGE->add_body_class('nvq-qa-page');
 
 $coursename = format_string($course->fullname, true, ['context' => $ctx, 'escape' => false]);
-$docs = qa::get_course_documents($course->id);
-$signdocs = array_filter($docs, function ($d) {
-    return (int) $d->doctype === qa::TYPE_SIGN;
-});
-$readdocs = array_filter($docs, function ($d) {
-    return (int) $d->doctype === qa::TYPE_READ;
-});
+
+// Which documents a page shows depends on whose page it is (IOMAD fork,
+// v27.2.0): a learner's checklist shows the platform documents plus that
+// learner's own company's; the tracker shows the platform documents plus
+// those of the companies of the learners the viewer may see. Each branch
+// below builds its own list - there is no "every document on the course"
+// list here any more, which is what kept company documents private on a
+// shared course.
+$splitdocs = function (array $docs): array {
+    return [
+        array_filter($docs, function ($d) {
+            return (int) $d->doctype === qa::TYPE_SIGN;
+        }),
+        array_filter($docs, function ($d) {
+            return (int) $d->doctype === qa::TYPE_READ;
+        }),
+    ];
+};
+
+// "Manage our documents" for a Company Manager whose company uses this course.
+$managecompanyid = 0;
+foreach (qa::get_manageable_companies() as $mc) {
+    if (isset($mc->courses[(int) $course->id])) {
+        $managecompanyid = (int) $mc->id;
+        break;
+    }
+}
+$manageurl = $managecompanyid
+    ? new moodle_url('/blocks/nvq_matrix/qa_manage.php', ['courseid' => $course->id, 'companyid' => $managecompanyid])
+    : null;
 
 // Where "back" goes: the matrix, on this learner and course when known.
 $backparams = [];
@@ -95,29 +118,47 @@ if ($trackermode) {
     $learners = qa::get_tracker_learners($ctx);
     $subs = qa::get_course_submissions($course->id);
     $withdrawn = matrix_data::get_withdrawn_map(array_keys($learners), [$course->id]);
+    [$signdocs, $readdocs] = $splitdocs(qa::get_tracker_documents((int) $course->id, array_keys($learners)));
+    $learnercompanies = qa::get_company_ids_for_users(array_keys($learners));
 
     $totals = ['learners' => count($learners), 'awaiting' => 0, 'returned' => 0, 'complete' => 0];
     $rows = [];
     foreach ($learners as $uid => $u) {
         $mine = $subs[$uid] ?? [];
-        $sum = qa::summarise($signdocs, $mine);
+        // Only this learner's documents count towards their progress: a
+        // column belonging to another company in the viewer's tracker
+        // shows as not applicable for them.
+        $applies = [];
+        foreach ($signdocs as $d) {
+            $owner = (int) $d->companyid;
+            if ($owner === 0 || in_array($owner, $learnercompanies[$uid] ?? [], true)) {
+                $applies[(int) $d->id] = true;
+            }
+        }
+        $sum = qa::summarise(array_intersect_key($signdocs, $applies), $mine);
         $totals['awaiting'] += $sum->awaiting;
         $totals['returned'] += $sum->returned;
         if ($sum->complete) {
             $totals['complete']++;
         }
-        $rows[] = ['user' => $u, 'subs' => $mine, 'sum' => $sum, 'withdrawn' => isset($withdrawn[$uid][$course->id])];
+        $rows[] = ['user' => $u, 'subs' => $mine, 'sum' => $sum, 'applies' => $applies,
+            'withdrawn' => isset($withdrawn[$uid][$course->id])];
     }
 
     echo '<header class="nvq-qa-head"><div>';
     echo '<h2 class="nvq-qa-h2">' . get_string('qatrackertitle', 'block_nvq_matrix') . '</h2>';
     echo '<p class="nvq-qa-muted">' . s($coursename) . '</p>';
-    echo '</div></header>';
+    echo '</div>';
+    if ($manageurl) {
+        echo html_writer::link($manageurl, qa_ui::icon('edit') . '<span>' . get_string('qamanagelink', 'block_nvq_matrix') . '</span>',
+            ['class' => 'nvq-qa-btn nvq-qa-btn--ghost']);
+    }
+    echo '</header>';
 
     if (empty($signdocs)) {
         echo '<div class="nvq-qa-empty">'
             . '<h3>' . get_string('qaemptytitle', 'block_nvq_matrix') . '</h3>'
-            . '<p>' . get_string('qatrackernosign', 'block_nvq_matrix') . '</p></div>';
+            . '<p>' . get_string($manageurl ? 'qatrackernosignmanage' : 'qatrackernosign', 'block_nvq_matrix') . '</p></div>';
         if (!empty($readdocs)) {
             echo html_writer::link(new moodle_url('/blocks/nvq_matrix/qa.php', ['courseid' => $course->id, 'studentid' => $USER->id]),
                 get_string('qaviewreaddocs', 'block_nvq_matrix'), ['class' => 'nvq-qa-btn nvq-qa-btn--ghost']);
@@ -183,6 +224,12 @@ if ($trackermode) {
             echo '<td class="nvq-qa-td-prog"><div class="nvq-qa-bar" role="img" aria-label="' . s($sum->accepted . '/' . $sum->total)
                 . '"><span style="width:' . $pct . '%"></span></div><span class="nvq-qa-bar-n">' . $sum->accepted . '/' . $sum->total . '</span></td>';
             foreach ($signdocs as $d) {
+                if (!isset($r['applies'][(int) $d->id])) {
+                    // Another company's document: nothing for this learner.
+                    echo '<td class="nvq-qa-td-doc"><span class="nvq-qa-muted" title="'
+                        . s(get_string('qanotapplicable', 'block_nvq_matrix')) . '">&ndash;</span></td>';
+                    continue;
+                }
                 $st = qa::status_of($r['subs'][(int) $d->id] ?? null);
                 echo '<td class="nvq-qa-td-doc">' . html_writer::link($learnerurl, qa_ui::status_pill($st),
                     ['class' => 'nvq-qa-cell', 'title' => s(fullname($u))]) . '</td>';
@@ -248,6 +295,9 @@ $canreview = $access->canreview && !$iswithdrawn;
 $canadmin = $access->canadminupload && !$iswithdrawn;
 $candelete = $access->candelete;
 $caniqasign = qa::can_iqa_sign($ctx);
+// This learner's documents only: the platform's and their own company's.
+$docs = qa::get_learner_documents((int) $course->id, $studentid);
+[$signdocs, $readdocs] = $splitdocs($docs);
 $subs = qa::get_learner_submissions((int) $course->id, $studentid);
 $sum = qa::summarise($docs, $subs);
 $maxbytes = qa::max_upload_bytes();

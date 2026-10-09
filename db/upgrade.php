@@ -1436,5 +1436,43 @@ function xmldb_block_nvq_matrix_upgrade(int $oldversion): bool {
         upgrade_block_savepoint(true, 2026100506, 'nvq_matrix');
     }
 
+    if ($oldversion < 2026100900) {
+        // IOMAD fork (v27.2.0): company-owned QA documents. A document
+        // now belongs either to the platform (companyid 0, managed by a
+        // site administrator on qa_admin.php, exactly as before) or to one
+        // IOMAD company, managed by that company's managers on
+        // qa_manage.php and shown only to that company's learners - even
+        // on a shared course. Every existing document stays a platform
+        // document (default 0), so nothing changes for anyone on upgrade.
+        $table = new xmldb_table('block_nvq_matrix_qadocs');
+        $field = new xmldb_field('companyid', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, '0', 'timemodified');
+        if (!$dbman->field_exists($table, $field)) {
+            $dbman->add_field($table, $field);
+        }
+        $index = new xmldb_index('companyid', XMLDB_INDEX_NOTUNIQUE, ['companyid']);
+        if (!$dbman->index_exists($table, $index)) {
+            $dbman->add_index($table, $index);
+        }
+
+        // New capability, granted to the two course roles a Company
+        // Manager holds (companycourseeditor on their own company's
+        // courses, companycoursenoneditor on shared courses - confirmed
+        // live 2026-10-08). Both carry custom IOMAD archetypes, so they
+        // inherit nothing from db/access.php. Registered explicitly first:
+        // assign_capability() needs the capability to exist already, and
+        // update_capabilities() otherwise only runs after this function.
+        update_capabilities('block_nvq_matrix');
+        $syscontext = \context_system::instance();
+        foreach (['companycourseeditor', 'companycoursenoneditor'] as $companyroleshortname) {
+            $companyrole = $DB->get_record('role', ['shortname' => $companyroleshortname]);
+            if ($companyrole) {
+                assign_capability('block/nvq_matrix:qamanage', CAP_ALLOW, $companyrole->id, $syscontext->id, true);
+            }
+        }
+        accesslib_clear_all_caches(false);
+
+        upgrade_block_savepoint(true, 2026100900, 'nvq_matrix');
+    }
+
     return true;
 }

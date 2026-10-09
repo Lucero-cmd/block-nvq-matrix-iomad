@@ -231,19 +231,30 @@ class qa {
     // ------------------------------------------------------------------
 
     /**
-     * Every document (admin list), each with its course ids.
+     * Documents with their course ids: every document (the administrator's
+     * list, $companyid null) or only one owner's (0 = platform documents,
+     * otherwise one company's - the Company Manager's list).
      *
-     * @param bool $enabledonly
+     * @param bool     $enabledonly
+     * @param int|null $companyid Null for every owner.
      * @return array docid => object (with ->courseids int[])
      */
-    public static function get_documents(bool $enabledonly = false): array {
+    public static function get_documents(bool $enabledonly = false, ?int $companyid = null): array {
         global $DB;
-        $docs = $DB->get_records('block_nvq_matrix_qadocs', $enabledonly ? ['enabled' => 1] : null, 'sortorder ASC, id ASC');
+        $conditions = [];
+        if ($enabledonly) {
+            $conditions['enabled'] = 1;
+        }
+        if ($companyid !== null) {
+            $conditions['companyid'] = $companyid;
+        }
+        $docs = $DB->get_records('block_nvq_matrix_qadocs', $conditions ?: null, 'companyid ASC, sortorder ASC, id ASC');
         foreach ($docs as $d) {
             $d->courseids = [];
         }
         if (!empty($docs)) {
-            $rs = $DB->get_recordset('block_nvq_matrix_qadoccourses', null, 'courseid ASC', 'id, docid, courseid');
+            [$insql, $params] = $DB->get_in_or_equal(array_keys($docs), SQL_PARAMS_NAMED, 'gd');
+            $rs = $DB->get_recordset_select('block_nvq_matrix_qadoccourses', "docid $insql", $params, 'courseid ASC', 'id, docid, courseid');
             foreach ($rs as $r) {
                 if (isset($docs[$r->docid])) {
                     $docs[$r->docid]->courseids[] = (int) $r->courseid;
@@ -255,20 +266,287 @@ class qa {
     }
 
     /**
-     * Enabled documents that apply to a course, in display order.
+     * Enabled documents on a course, in display order: always the platform
+     * documents, plus the documents of the companies named in $companyids.
      *
-     * @param int $courseid
+     * IOMAD fork (v27.2.0): this is deliberately NOT "every document on
+     * the course". On a shared course, several companies can each attach
+     * their own documents; a caller must say whose it wants, normally
+     * through get_learner_documents() or get_tracker_documents(). An empty
+     * list gives platform documents only, so a caller that forgets can
+     * never show one company's document to another company.
+     *
+     * @param int   $courseid
+     * @param int[] $companyids Companies whose own documents to include.
      * @return array docid => record
      */
-    public static function get_course_documents(int $courseid): array {
+    public static function get_course_documents(int $courseid, array $companyids = []): array {
         global $DB;
+        $params = ['courseid' => $courseid];
+        $ownersql = 'd.companyid = 0';
+        $companyids = array_values(array_unique(array_filter(array_map('intval', $companyids))));
+        if (!empty($companyids)) {
+            [$insql, $inparams] = $DB->get_in_or_equal($companyids, SQL_PARAMS_NAMED, 'cdco');
+            $ownersql = "(d.companyid = 0 OR d.companyid $insql)";
+            $params += $inparams;
+        }
         return $DB->get_records_sql("
             SELECT d.*
               FROM {block_nvq_matrix_qadocs} d
               JOIN {block_nvq_matrix_qadoccourses} dc ON dc.docid = d.id
-             WHERE dc.courseid = :courseid AND d.enabled = 1
-          ORDER BY d.sortorder ASC, d.id ASC
-        ", ['courseid' => $courseid]);
+             WHERE dc.courseid = :courseid AND d.enabled = 1 AND $ownersql
+          ORDER BY CASE WHEN d.companyid = 0 THEN 0 ELSE 1 END, d.sortorder ASC, d.id ASC
+        ", $params);
+    }
+
+    /**
+     * The documents one learner gets on a course: the platform documents
+     * and the documents of the company (or companies) the learner belongs
+     * to - never another company's, even on a shared course.
+     *
+     * @param int $courseid
+     * @param int $userid
+     * @return array docid => record
+     */
+    public static function get_learner_documents(int $courseid, int $userid): array {
+        return self::get_course_documents($courseid, self::get_user_company_ids($userid));
+    }
+
+    /**
+     * The documents shown as columns on a course tracker: the platform
+     * documents plus the documents of every company the viewer belongs to
+     * or any of the listed learners belongs to. A viewer only ever lists
+     * learners they are allowed to see (get_tracker_learners()), so a
+     * group-restricted viewer never sees another company's document title.
+     * A site administrator sees every document on the course.
+     *
+     * @param int   $courseid
+     * @param int[] $learnerids The learners on the viewer's tracker.
+     * @return array docid => record
+     */
+    public static function get_tracker_documents(int $courseid, array $learnerids): array {
+        global $USER, $DB;
+        if (is_siteadmin()) {
+            $all = $DB->get_fieldset_select('block_nvq_matrix_qadocs', 'DISTINCT companyid', 'companyid > 0');
+            return self::get_course_documents($courseid, $all);
+        }
+        $companyids = self::get_user_company_ids((int) $USER->id);
+        foreach (self::get_company_ids_for_users($learnerids) as $ids) {
+            $companyids = array_merge($companyids, $ids);
+        }
+        return self::get_course_documents($courseid, $companyids);
+    }
+
+    /**
+     * Whether a document applies to one learner on one course: it is on
+     * that course and it is a platform document or one of the learner's
+     * own company's. Re-checked server-side on every upload, review,
+     * download and administrator action.
+     *
+     * @param \stdClass $doc
+     * @param int       $courseid
+     * @param int       $userid
+     * @return bool
+     */
+    public static function doc_applies_to_learner(\stdClass $doc, int $courseid, int $userid): bool {
+        global $DB;
+        if (!$DB->record_exists('block_nvq_matrix_qadoccourses', ['docid' => $doc->id, 'courseid' => $courseid])) {
+            return false;
+        }
+        return self::doc_owned_for_learner($doc, $userid);
+    }
+
+    /**
+     * The ownership half of doc_applies_to_learner(): a platform document,
+     * or one owned by a company the learner belongs to.
+     *
+     * @param \stdClass $doc
+     * @param int       $userid
+     * @return bool
+     */
+    public static function doc_owned_for_learner(\stdClass $doc, int $userid): bool {
+        $owner = (int) ($doc->companyid ?? 0);
+        return $owner === 0 || in_array($owner, self::get_user_company_ids($userid), true);
+    }
+
+    // ------------------------------------------------------------------
+    // Companies (IOMAD fork, v27.2.0).
+    // ------------------------------------------------------------------
+
+    /**
+     * Whether this site has IOMAD's company tables.
+     *
+     * @return bool
+     */
+    protected static function has_companies(): bool {
+        global $DB;
+        static $has = null;
+        if ($has === null) {
+            $dbman = $DB->get_manager();
+            $has = $dbman->table_exists('local_iomad_company_users')
+                && $dbman->table_exists('local_iomad_company_courses')
+                && $dbman->table_exists('local_iomad_companies');
+        }
+        return $has;
+    }
+
+    /**
+     * Company ids for several users at once.
+     *
+     * @param int[] $userids
+     * @return array userid => int[] company ids (users in no company are absent)
+     */
+    public static function get_company_ids_for_users(array $userids): array {
+        global $DB;
+        $userids = array_values(array_unique(array_filter(array_map('intval', $userids))));
+        if (empty($userids) || !self::has_companies()) {
+            return [];
+        }
+        $out = [];
+        foreach (array_chunk($userids, 500) as $chunk) {
+            [$insql, $params] = $DB->get_in_or_equal($chunk, SQL_PARAMS_NAMED, 'ucu');
+            $rs = $DB->get_recordset_select('local_iomad_company_users', "userid $insql", $params, '', 'id, userid, companyid');
+            foreach ($rs as $r) {
+                $out[(int) $r->userid][(int) $r->companyid] = (int) $r->companyid;
+            }
+            $rs->close();
+        }
+        return array_map('array_values', $out);
+    }
+
+    /**
+     * The companies one user belongs to.
+     *
+     * @param int $userid
+     * @return int[]
+     */
+    public static function get_user_company_ids(int $userid): array {
+        static $cache = [];
+        if (!array_key_exists($userid, $cache)) {
+            $cache[$userid] = self::get_company_ids_for_users([$userid])[$userid] ?? [];
+        }
+        return $cache[$userid];
+    }
+
+    /**
+     * Company names by id.
+     *
+     * @param int[] $companyids
+     * @return array companyid => name
+     */
+    public static function get_company_names(array $companyids): array {
+        global $DB;
+        $companyids = array_values(array_unique(array_filter(array_map('intval', $companyids))));
+        if (empty($companyids) || !self::has_companies()) {
+            return [];
+        }
+        [$insql, $params] = $DB->get_in_or_equal($companyids, SQL_PARAMS_NAMED, 'cn');
+        return $DB->get_records_select_menu('local_iomad_companies', "id $insql", $params, 'name ASC', 'id, name');
+    }
+
+    /**
+     * The companies whose QA documents a user may manage, each with the
+     * courses they may attach those documents to.
+     *
+     * A company is listed only when all three hold:
+     *   - the user is a manager of that company in IOMAD
+     *     (local_iomad_company_users.managertype = 1) and the company is
+     *     neither suspended nor terminated;
+     *   - the course is linked to that company (local_iomad_company_courses
+     *     or local_iomad_company_shared_courses - the company's own courses
+     *     and the shared courses it uses);
+     *   - the user holds block/nvq_matrix:qamanage on that course.
+     * So a manager can only ever reach their own company's documents, and
+     * only attach them to courses their company actually uses.
+     *
+     * @param int|null $userid Defaults to the current user.
+     * @return array companyid => (object) {id, name, courses: [courseid => name]}
+     */
+    public static function get_manageable_companies(?int $userid = null): array {
+        global $USER, $DB;
+        static $cache = [];
+        $userid = $userid ?? (int) $USER->id;
+        if (array_key_exists($userid, $cache)) {
+            return $cache[$userid];
+        }
+        if (!self::has_companies()) {
+            return $cache[$userid] = [];
+        }
+        // DISTINCT: IOMAD keeps one company_users row per department, so a
+        // manager in several departments of one company has several rows.
+        $companies = $DB->get_records_sql("
+            SELECT DISTINCT c.id, c.name
+              FROM {local_iomad_company_users} cu
+              JOIN {local_iomad_companies} c ON c.id = cu.companyid
+             WHERE cu.userid = :userid AND cu.managertype = 1 AND c.suspended = 0 AND c.isterminated = 0
+          ORDER BY c.name ASC
+        ", ['userid' => $userid]);
+        // A company's courses are its own (local_iomad_company_courses) and
+        // the shared courses it has been given (also recorded per company
+        // in local_iomad_company_shared_courses by IOMAD's sharing flow).
+        // Both are read, so a shared course is always offered even where
+        // IOMAD did not also write a company_courses row for it.
+        $sharedsql = $DB->get_manager()->table_exists('local_iomad_company_shared_courses')
+            ? 'UNION SELECT sc.courseid FROM {local_iomad_company_shared_courses} sc WHERE sc.companyid = :c2'
+            : '';
+        $out = [];
+        foreach ($companies as $c) {
+            // Moodle refuses a named parameter the SQL does not use, so :c2
+            // is only passed when the shared-courses part is present.
+            $params = ['c1' => $c->id, 'siteid' => SITEID];
+            if ($sharedsql !== '') {
+                $params['c2'] = $c->id;
+            }
+            $courses = $DB->get_records_sql("
+                SELECT co.id, co.fullname
+                  FROM {course} co
+                 WHERE co.id <> :siteid
+                   AND co.id IN (SELECT cc.courseid FROM {local_iomad_company_courses} cc WHERE cc.companyid = :c1
+                                 $sharedsql)
+              ORDER BY co.fullname ASC
+            ", $params);
+            $allowed = [];
+            foreach ($courses as $co) {
+                $ctx = \context_course::instance((int) $co->id, IGNORE_MISSING);
+                if ($ctx && has_capability('block/nvq_matrix:qamanage', $ctx, $userid)) {
+                    $allowed[(int) $co->id] = format_string($co->fullname, true, ['context' => $ctx, 'escape' => false]);
+                }
+            }
+            if (!empty($allowed)) {
+                $out[(int) $c->id] = (object) ['id' => (int) $c->id, 'name' => $c->name, 'courses' => $allowed];
+            }
+        }
+        return $cache[$userid] = $out;
+    }
+
+    /**
+     * Whether the current user manages the QA documents of one company
+     * (see get_manageable_companies()).
+     *
+     * @param int $companyid
+     * @return bool
+     */
+    public static function can_manage_company(int $companyid): bool {
+        return $companyid > 0 && isset(self::get_manageable_companies()[$companyid]);
+    }
+
+    /**
+     * The course ids a document should keep after a Company Manager saves
+     * it: what they chose, limited to the courses they may manage, plus
+     * any existing links outside their reach (left exactly as they were,
+     * never removed or added by someone who could not see them).
+     *
+     * @param int[] $existing  Current course ids of the document.
+     * @param int[] $submitted Course ids the manager chose.
+     * @param int[] $allowed   Course ids the manager may manage.
+     * @return int[]
+     */
+    public static function merge_managed_courses(array $existing, array $submitted, array $allowed): array {
+        $existing = array_map('intval', $existing);
+        $allowed = array_map('intval', $allowed);
+        $chosen = array_intersect(array_map('intval', $submitted), $allowed);
+        $untouchable = array_diff($existing, $allowed);
+        return array_values(array_unique(array_merge($chosen, $untouchable)));
     }
 
     /**
@@ -320,7 +598,15 @@ class qa {
      */
     public static function move_document(int $docid, int $direction): void {
         global $DB;
-        $docs = array_values($DB->get_records('block_nvq_matrix_qadocs', null, 'sortorder ASC, id ASC', 'id, sortorder'));
+        // Only among documents with the same owner (IOMAD fork, v27.2.0):
+        // a company reordering its own list must never shift the platform
+        // documents or another company's.
+        $owner = $DB->get_field('block_nvq_matrix_qadocs', 'companyid', ['id' => $docid]);
+        if ($owner === false) {
+            return;
+        }
+        $docs = array_values($DB->get_records('block_nvq_matrix_qadocs', ['companyid' => (int) $owner],
+            'sortorder ASC, id ASC', 'id, sortorder'));
         // Re-number first so equal sort orders cannot make a move a no-op.
         foreach ($docs as $i => $d) {
             if ((int) $d->sortorder !== $i + 1) {
@@ -352,6 +638,35 @@ class qa {
             \context_system::instance()->id, 'block_nvq_matrix', self::AREA_MASTER, $docid, 'id ASC', false
         );
         return $files ? reset($files) : null;
+    }
+
+    /**
+     * Checks the master file waiting in a form's draft area the same way a
+     * learner's upload is checked (extension, size and actual content),
+     * before anything is saved. Used for documents a Company Manager
+     * uploads (IOMAD fork, v27.2.0); the file picker only checks the
+     * extension. Run from the form's validation, so a bad file is refused
+     * on the form and neither the document nor its current master file is
+     * touched.
+     *
+     * @param int $draftitemid
+     * @param int $userid Owner of the draft area.
+     * @return string Empty when fine (or no file), otherwise a lang string identifier.
+     */
+    public static function check_draft_master(int $draftitemid, int $userid): string {
+        $files = get_file_storage()->get_area_files(
+            \context_user::instance($userid)->id, 'user', 'draft', $draftitemid, 'id', false
+        );
+        foreach ($files as $file) {
+            $tmp = make_request_directory() . '/master';
+            $file->copy_content_to($tmp);
+            $err = self::validate_file($tmp, $file->get_filename(), self::MASTER_EXTENSIONS);
+            @unlink($tmp);
+            if ($err !== '') {
+                return $err;
+            }
+        }
+        return '';
     }
 
     /**
@@ -559,7 +874,9 @@ class qa {
         if ((int) $doc->doctype !== self::TYPE_SIGN || !(int) $doc->enabled) {
             return 'qaerrornotallowed';
         }
-        if (!$DB->record_exists('block_nvq_matrix_qadoccourses', ['docid' => $doc->id, 'courseid' => $courseid])) {
+        // On this course AND the platform's or this learner's own
+        // company's (IOMAD fork, v27.2.0).
+        if (!self::doc_applies_to_learner($doc, $courseid, $userid)) {
             return 'qaerrornotallowed';
         }
         if (matrix_data::is_withdrawn($userid, $courseid)) {
@@ -738,8 +1055,7 @@ class qa {
         if (!is_siteadmin()) {
             return 'qaerrornotallowed';
         }
-        if ((int) $doc->doctype !== self::TYPE_SIGN
-                || !$DB->record_exists('block_nvq_matrix_qadoccourses', ['docid' => $doc->id, 'courseid' => $courseid])) {
+        if ((int) $doc->doctype !== self::TYPE_SIGN || !self::doc_applies_to_learner($doc, $courseid, $userid)) {
             return 'qaerrornotallowed';
         }
         $ctx = \context_course::instance($courseid, IGNORE_MISSING);
@@ -933,13 +1249,40 @@ class qa {
         if (is_siteadmin()) {
             return true;
         }
+        // A company's own document (IOMAD fork, v27.2.0): only people in
+        // that company may open it, whatever course they share with it -
+        // on a shared course another company's staff and learners are
+        // enrolled too, so being on the course is not enough.
+        $owner = (int) $DB->get_field('block_nvq_matrix_qadocs', 'companyid', ['id' => $docid]);
+        if ($owner > 0 && self::can_manage_company($owner)) {
+            // The owning company's manager, previewing on qa_manage.php.
+            return true;
+        }
+        $staffonly = false;
+        if ($owner > 0) {
+            $mine = self::get_user_company_ids((int) $USER->id);
+            if (!in_array($owner, $mine, true)) {
+                if (!empty($mine)) {
+                    // A member of another company: never.
+                    return false;
+                }
+                // Platform staff who belong to no company (for example an
+                // IQA or EQA working across providers) see this company's
+                // learners and so the document's column and checklist
+                // entry; they may open its form, but only as staff on a
+                // course it is on - never through enrolment alone, which
+                // would let a learner outside every company in.
+                $staffonly = true;
+            }
+        }
         $courseids = $DB->get_fieldset_select('block_nvq_matrix_qadoccourses', 'courseid', 'docid = ?', [$docid]);
         foreach ($courseids as $cid) {
             $ctx = \context_course::instance((int) $cid, IGNORE_MISSING);
             if (!$ctx) {
                 continue;
             }
-            if (has_capability('block/nvq_matrix:viewall', $ctx) || is_enrolled($ctx, $USER->id, '', true)) {
+            if (has_capability('block/nvq_matrix:viewall', $ctx)
+                    || (!$staffonly && is_enrolled($ctx, $USER->id, '', true))) {
                 return true;
             }
         }
@@ -1030,7 +1373,7 @@ class qa {
      * @return \stdClass|null {docs, total, accepted, awaiting, returned}
      */
     public static function link_summary(int $courseid, int $studentid): ?\stdClass {
-        $docs = self::get_course_documents($courseid);
+        $docs = self::get_learner_documents($courseid, $studentid);
         if (empty($docs)) {
             return null;
         }

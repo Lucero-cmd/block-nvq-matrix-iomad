@@ -37,6 +37,9 @@ use block_nvq_matrix\form\qa_document_form;
 
 $action = optional_param('action', 'list', PARAM_ALPHA);
 $id     = optional_param('id', 0, PARAM_INT);
+// The document being duplicated - its own URL parameter, because the
+// form's hidden "id" (0 for a copy) wins over the URL's "id" on submit.
+$copyfrom = optional_param('copyfrom', 0, PARAM_INT);
 $view   = optional_param('view', 'documents', PARAM_ALPHA);
 
 admin_externalpage_setup('block_nvq_matrix_qadocs', '', ['action' => $action, 'id' => $id, 'view' => $view]);
@@ -89,7 +92,12 @@ if ($action === 'delete') {
 // ---------------------------------------------------------------------
 if (in_array($action, ['add', 'edit', 'copy'], true)) {
     $fileoptions = qa_document_form::file_options();
-    $form = new qa_document_form(new moodle_url($baseurl, ['action' => $action, 'id' => $id]));
+    $sourceid = ($action === 'copy') ? ($copyfrom ?: $id) : $id;
+    $formurlparams = ['action' => $action, 'id' => $id];
+    if ($action === 'copy') {
+        $formurlparams['copyfrom'] = $sourceid;
+    }
+    $form = new qa_document_form(new moodle_url($baseurl, $formurlparams));
 
     if ($form->is_cancelled()) {
         redirect($baseurl);
@@ -111,7 +119,19 @@ if (in_array($action, ['add', 'edit', 'copy'], true)) {
             $DB->update_record('block_nvq_matrix_qadocs', $record);
             $docid = (int) $data->id;
         } else {
-            $record->sortorder   = (int) $DB->get_field_sql('SELECT COALESCE(MAX(sortorder), 0) FROM {block_nvq_matrix_qadocs}') + 1;
+            // A new document from this page is a platform document
+            // (companyid 0) - companies add their own on qa_manage.php -
+            // except a duplicate, which keeps the owner of the document it
+            // was copied from. Otherwise duplicating a company's document
+            // on a shared course would silently show the copy to every
+            // other company's learners there.
+            $owner = 0;
+            if ($action === 'copy' && $sourceid) {
+                $owner = (int) $DB->get_field('block_nvq_matrix_qadocs', 'companyid', ['id' => $sourceid]);
+            }
+            $record->companyid   = $owner;
+            $record->sortorder   = (int) $DB->get_field_sql(
+                'SELECT COALESCE(MAX(sortorder), 0) FROM {block_nvq_matrix_qadocs} WHERE companyid = ?', [$owner]) + 1;
             $record->createdby   = (int) $USER->id;
             $record->timecreated = $now;
             $docid = (int) $DB->insert_record('block_nvq_matrix_qadocs', $record);
@@ -143,8 +163,8 @@ if (in_array($action, ['add', 'edit', 'copy'], true)) {
     $toset->doctype = qa::TYPE_SIGN;
     $toset->signoff = 1;
     $toset->enabled = 1;
-    if (in_array($action, ['edit', 'copy'], true) && $id) {
-        $doc = $DB->get_record('block_nvq_matrix_qadocs', ['id' => $id], '*', MUST_EXIST);
+    if (in_array($action, ['edit', 'copy'], true) && $sourceid) {
+        $doc = $DB->get_record('block_nvq_matrix_qadocs', ['id' => $sourceid], '*', MUST_EXIST);
         $docs = qa::get_documents();
         $toset->title        = $action === 'copy' ? '' : $doc->title;
         $toset->description  = $action === 'copy' ? '' : $doc->description;
@@ -275,17 +295,32 @@ if ($view === 'courses') {
     die();
 }
 
-// Document cards.
-$ids = array_keys($docs);
-$first = reset($ids);
-$last = end($ids);
+// Document cards. Each owner (the platform, or one company) has its own
+// order, so "first" and "last" for the move buttons are per owner
+// (IOMAD fork, v27.2.0).
+$firstbyowner = [];
+$lastbyowner = [];
+foreach ($docs as $d) {
+    $o = (int) $d->companyid;
+    if (!isset($firstbyowner[$o])) {
+        $firstbyowner[$o] = (int) $d->id;
+    }
+    $lastbyowner[$o] = (int) $d->id;
+}
+$ownernames = qa::get_company_names(array_keys($firstbyowner));
 echo '<div class="nvq-qa-cardlist">';
 foreach ($docs as $d) {
     $issign = ((int) $d->doctype === qa::TYPE_SIGN);
     $master = qa::get_master_file((int) $d->id);
+    $owner = (int) $d->companyid;
+    $first = $firstbyowner[$owner];
+    $last = $lastbyowner[$owner];
     echo '<article class="nvq-qa-admincard' . ($d->enabled ? '' : ' is-disabled') . '">';
     echo '<div class="nvq-qa-admincard-main">';
     echo '<div class="nvq-qa-admincard-top">';
+    echo '<span class="nvq-qa-typechip">' . s($owner === 0
+        ? get_string('qaownerplatform', 'block_nvq_matrix')
+        : get_string('qaownercompany', 'block_nvq_matrix', $ownernames[$owner] ?? ('#' . $owner))) . '</span>';
     echo '<span class="nvq-qa-typechip nvq-qa-typechip--' . ($issign ? 'sign' : 'read') . '">'
         . qa_ui::icon($issign ? 'pen' : 'eye') . get_string($issign ? 'qatypesign' : 'qatyperead', 'block_nvq_matrix') . '</span>';
     if ($issign && $d->needscounter) {

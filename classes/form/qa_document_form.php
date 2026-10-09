@@ -94,31 +94,56 @@ class qa_document_form extends \moodleform {
         $mform->setDefault('enabled', 1);
 
         $mform->addElement('header', 'hdrcourses', get_string('qaformcourses', 'block_nvq_matrix'));
-        $courses = $DB->get_records_select('course', 'id <> :site', ['site' => SITEID], 'fullname ASC', 'id, fullname, shortname');
-        $options = [];
-        foreach ($courses as $c) {
-            $label = format_string($c->fullname, true, ['context' => \context_system::instance(), 'escape' => false]);
-            if ($c->shortname !== '' && $c->shortname !== $c->fullname) {
-                $label .= ' (' . format_string($c->shortname, true, ['context' => \context_system::instance(), 'escape' => false]) . ')';
+        if ($this->is_company_mode()) {
+            // Company Manager (IOMAD fork, v27.2.0): only the courses this
+            // manager may manage for their own company - see
+            // qa::get_manageable_companies(). qa_manage.php re-checks the
+            // submitted ids against the same list before saving.
+            $options = $this->_customdata['courseoptions'];
+        } else {
+            $courses = $DB->get_records_select('course', 'id <> :site', ['site' => SITEID], 'fullname ASC', 'id, fullname, shortname');
+            $options = [];
+            foreach ($courses as $c) {
+                $label = format_string($c->fullname, true, ['context' => \context_system::instance(), 'escape' => false]);
+                if ($c->shortname !== '' && $c->shortname !== $c->fullname) {
+                    $label .= ' (' . format_string($c->shortname, true, ['context' => \context_system::instance(), 'escape' => false]) . ')';
+                }
+                $options[$c->id] = $label;
             }
-            $options[$c->id] = $label;
         }
         $mform->addElement('autocomplete', 'courseids', get_string('qadoccourses', 'block_nvq_matrix'), $options, [
             'multiple' => true,
             'placeholder' => get_string('qadoccourses_placeholder', 'block_nvq_matrix'),
             'noselectionstring' => get_string('qadoccourses_placeholder', 'block_nvq_matrix'),
         ]);
-        $mform->addHelpButton('courseids', 'qadoccourses', 'block_nvq_matrix');
+        $mform->addHelpButton('courseids', $this->is_company_mode() ? 'qamanagecourses' : 'qadoccourses', 'block_nvq_matrix');
 
         $mform->addElement('header', 'hdrfile', get_string('qaformfile', 'block_nvq_matrix'));
         $mform->addElement('static', 'filelimit', '', get_string('qafilelimit', 'block_nvq_matrix', display_size(qa::max_upload_bytes())));
         $mform->addElement('filemanager', 'masterfile_filemanager', get_string('qamasterfile', 'block_nvq_matrix'), null,
             self::file_options());
-        $mform->addElement('text', 'importcmid', get_string('qaimportcmid', 'block_nvq_matrix'), ['size' => 10]);
-        $mform->setType('importcmid', PARAM_INT);
-        $mform->addHelpButton('importcmid', 'qaimportcmid', 'block_nvq_matrix');
+        // Importing from an existing File resource by its id is for site
+        // administrators only: it does not check who may see that
+        // resource, so a Company Manager could otherwise copy another
+        // company's file by guessing its id.
+        if (!$this->is_company_mode()) {
+            $mform->addElement('text', 'importcmid', get_string('qaimportcmid', 'block_nvq_matrix'), ['size' => 10]);
+            $mform->setType('importcmid', PARAM_INT);
+            $mform->addHelpButton('importcmid', 'qaimportcmid', 'block_nvq_matrix');
+        }
 
         $this->add_action_buttons(true, get_string('qasavedocument', 'block_nvq_matrix'));
+    }
+
+    /**
+     * Whether the form is being used by a Company Manager for their own
+     * company's documents (custom data 'courseoptions' given) rather than
+     * by a site administrator.
+     *
+     * @return bool
+     */
+    protected function is_company_mode(): bool {
+        return is_array($this->_customdata) && array_key_exists('courseoptions', $this->_customdata);
     }
 
     /**
@@ -139,7 +164,14 @@ class qa_document_form extends \moodleform {
             $errors['courseids'] = get_string('qaerrornocourses', 'block_nvq_matrix');
         }
 
-        $importcmid = (int) ($data['importcmid'] ?? 0);
+        if ($this->is_company_mode() && !empty($data['courseids'])) {
+            $allowed = array_map('intval', array_keys($this->_customdata['courseoptions']));
+            if (array_diff(array_map('intval', (array) $data['courseids']), $allowed)) {
+                $errors['courseids'] = get_string('qaerrornotallowed', 'block_nvq_matrix');
+            }
+        }
+
+        $importcmid = $this->is_company_mode() ? 0 : (int) ($data['importcmid'] ?? 0);
         if ($importcmid > 0) {
             $found = $DB->get_record_sql("
                 SELECT cm.id
@@ -157,6 +189,13 @@ class qa_document_form extends \moodleform {
             );
             if (empty($drafts)) {
                 $errors['masterfile_filemanager'] = get_string('qaerrornomaster', 'block_nvq_matrix');
+            } else if ($this->is_company_mode()) {
+                // A Company Manager's file is checked by content too, the
+                // same way a learner's upload is, before anything is saved.
+                $err = qa::check_draft_master((int) $data['masterfile_filemanager'], (int) $USER->id);
+                if ($err !== '') {
+                    $errors['masterfile_filemanager'] = get_string($err, 'block_nvq_matrix');
+                }
             }
         }
         return $errors;

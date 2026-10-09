@@ -17,6 +17,77 @@
 /**
  * Version metadata for the block_nvq_matrix plugin.
  *
+ * v27.2.0 (1.23.0) — Company-owned Quality Assurance documents (IOMAD
+ *   fork only; not in the plain-Moodle source). Until now only a site
+ *   administrator could add QA documents, and a document applied to
+ *   whole courses - so on a shared (course bank) course every company's
+ *   learners got exactly the same documents, and no provider could add
+ *   their own.
+ *   - qadocs gains companyid: 0 = platform document (qa_admin.php, shown
+ *     to every learner on the chosen courses, unchanged), otherwise the
+ *     IOMAD company that owns it. Existing documents stay platform
+ *     documents, so nothing changes for anyone on upgrade.
+ *   - New qa_manage.php: a Company Manager adds, edits, copies,
+ *     reorders, hides and deletes their own company's documents and
+ *     chooses which of their company's courses each applies to, shared
+ *     courses included. Allowed only when ALL of: holds the new
+ *     block/nvq_matrix:qamanage on the course (granted to
+ *     companycourseeditor and companycoursenoneditor), is a manager of
+ *     that company in IOMAD (local_iomad_company_users.managertype = 1),
+ *     the company is neither suspended nor terminated, and the course is
+ *     linked to the company (local_iomad_company_courses). Every action
+ *     re-loads the document by id AND company. Course links outside the
+ *     manager's reach are never added or removed. Delete is allowed
+ *     even after learners have submitted (client decision 2026-10-09, so
+ *     a wrong or mislabelled document can be removed), behind a warning
+ *     giving the number of learners' signed records it destroys; hide
+ *     keeps them. No "import
+ *     from an existing File resource by id" for managers - it does not
+ *     check who may see that resource. Uploaded master files get the
+ *     same content check as learners' uploads, in the form's validation,
+ *     so a bad file is refused before anything is saved. A manager can
+ *     preview their own company's hidden documents.
+ *   - Isolation: qa::get_course_documents() now returns platform
+ *     documents plus only the companies a caller names; there is no
+ *     "every document on the course" read outside qa_admin.php. A
+ *     learner's checklist, summary and matrix link show the platform's
+ *     and their own company's documents; the tracker shows those of the
+ *     viewer's and their visible learners' companies (another company's
+ *     column shows "-" for a learner it does not apply to); uploads,
+ *     accept/return, administrator upload/delete and master downloads all
+ *     re-check that the document is the learner's (platform or own
+ *     company). Opening already-submitted files is NOT re-checked
+ *     against the document's owner (a submission only exists for a
+ *     document that was the learner's when uploaded, and get_access()
+ *     already confines the viewer), so removing a course from a document
+ *     or a learner moving company never makes signed files unopenable.
+ *     Known limitation: a learner moved to another company no longer
+ *     sees the old company's documents listed on their checklist - the
+ *     records and files are kept.
+ *   - Reordering is per owner, so a company never moves platform or
+ *     other companies' documents. qa_admin.php shows each document's
+ *     owner, and Duplicate keeps the owner of the original (a copy of a
+ *     company's document never becomes a platform document).
+ *   - Isolation rests on the existing group set-up: a viewer with no
+ *     group restriction on a shared course (accessallgroups, or a course
+ *     not in separate groups) sees every learner there, and so every
+ *     company's document titles in the tracker.
+ *   - A company's courses for qa_manage.php are read from both
+ *     local_iomad_company_courses and local_iomad_company_shared_courses,
+ *     so a shared course is always offered.
+ *   - Platform staff who belong to no company may open a company
+ *     document's form as staff (viewall) on a course it is on; a member
+ *     of another company never can, nor can anyone through enrolment
+ *     alone.
+ *   - Duplicate (both pages) carries its source in a separate "copyfrom"
+ *     parameter: Moodle reads POST before GET, so the form's hidden id
+ *     (0 for a copy) used to replace the URL's id on submit.
+ *   - Two independent reviews (2026-10-09) found no cross-company leak;
+ *     their other findings are fixed here.
+ *   - The matrix's QA tracker link now also appears for a Company
+ *     Manager whose company uses the course but has no documents yet, so
+ *     they can reach "Manage our documents" to add the first one.
+ *
  * v27.1.0 (1.22.0) — Ports the plain-Moodle source's v1.20.28→v1.25.0
  *   feature set (alexddelearning.com) onto this IOMAD fork, with the
  *   multi-tenant isolation guide's group/company scoping threaded
@@ -3045,7 +3116,7 @@
 
 defined('MOODLE_INTERNAL') || die();
 
-$plugin->version   = 2026100506;
+$plugin->version   = 2026100900;
 $plugin->requires  = 2024100700; // Moodle 4.5 — floor only, nothing here is version-pinned above that.
 // $plugin->supported deliberately omitted. Setting an upper branch number here
 // (e.g. [405, 501]) only controls a cosmetic "not officially supported"
@@ -3060,4 +3131,4 @@ $plugin->requires  = 2024100700; // Moodle 4.5 — floor only, nothing here is v
 // clear error on upgrade — re-test at that point rather than pre-emptively.
 $plugin->component = 'block_nvq_matrix';
 $plugin->maturity  = MATURITY_STABLE;
-$plugin->release   = '1.22.0';
+$plugin->release   = '1.23.0';

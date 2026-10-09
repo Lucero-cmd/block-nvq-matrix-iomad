@@ -333,10 +333,14 @@
         <FIELD NAME="createdby" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false"/>
         <FIELD NAME="timecreated" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false"/>
         <FIELD NAME="timemodified" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false"/>
+        <FIELD NAME="companyid" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false" COMMENT="IOMAD fork (v27.2.0): 0 = platform document managed by a site administrator, shown to every learner on the chosen courses. Otherwise the IOMAD company (local_iomad_companies.id) that owns it: managed only by that company's managers on qa_manage.php, and shown only to learners who belong to that company, even on a shared course."/>
       </FIELDS>
       <KEYS>
         <KEY NAME="primary" TYPE="primary" FIELDS="id"/>
       </KEYS>
+      <INDEXES>
+        <INDEX NAME="companyid" UNIQUE="false" FIELDS="companyid"/>
+      </INDEXES>
     </TABLE>
     <TABLE NAME="block_nvq_matrix_qadoccourses" COMMENT="Which courses each QA document applies to (v26.7.1). One row per document and course.">
       <FIELDS>

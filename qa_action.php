@@ -112,6 +112,11 @@ try {
         if (!$access || !$access->canreview) {
             nvq_qa_respond(false, 'qaerrornotallowed');
         }
+        // The document must be this learner's: the platform's or their own
+        // company's (IOMAD fork, v27.2.0).
+        if (!qa::doc_applies_to_learner($doc, $courseid, $studentid)) {
+            nvq_qa_respond(false, 'qaerrornotallowed');
+        }
         $sub = qa::get_submission($docid, $courseid, $studentid);
         if (!$sub) {
             nvq_qa_respond(false, 'qaerrornotallowed');
@@ -142,6 +147,9 @@ try {
         $studentid = required_param('studentid', PARAM_INT);
         $access = qa::get_access($coursecontext, $studentid);
         if (!$access || !$access->canadminupload) {
+            nvq_qa_respond(false, 'qaerrornotallowed');
+        }
+        if (!qa::doc_applies_to_learner($doc, $courseid, $studentid)) {
             nvq_qa_respond(false, 'qaerrornotallowed');
         }
         if ($action === 'delete') {

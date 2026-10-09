@@ -547,3 +547,22 @@ $string['privacy:metadata:block_nvq_matrix_grades_history'] = 'Earlier versions 
 $string['privacy:metadata:block_nvq_matrix_sampling_history'] = 'Earlier versions of the IQA/EQA sampling status, kept when a status is changed, cleared or deleted.';
 $string['privacy:metadata:block_nvq_matrix_status_history'] = 'Earlier versions of the final Pass/Fail status, kept when a status is changed, cleared or deleted.';
 $string['privacy:metadata:block_nvq_matrix_unit_comments_history'] = 'Earlier versions of unit-level assessor and IQA comments, kept when a comment is changed, cleared or deleted.';
+
+// Company-owned Quality Assurance documents (IOMAD fork, v27.2.0).
+$string['nvq_matrix:qamanage'] = 'Manage their own company\'s Quality Assurance documents';
+$string['qabacktotracker'] = 'Back to the Quality Assurance tracker';
+$string['qamanagecourses'] = 'Applies to these courses';
+$string['qamanagecourses_help'] = 'Choose which of your company\'s courses this document applies to, including shared courses. Only learners in your company see it. On a shared course, other companies\' learners and staff never see your documents.';
+$string['qamanagedeleteconfirmsubs'] = 'Delete "{$a->title}"? This also permanently deletes {$a->count} learner submission(s) for it: the copies the learners signed, the Assessor and IQA signed copies, and their history. This cannot be undone. If the document is only out of date rather than wrong, hide it instead to keep these records.';
+$string['qamanageempty'] = 'Your company has not added any documents yet. Use "Add document" to upload one and choose the courses it applies to.';
+$string['qamanageformintro'] = 'This document will belong to {$a}. Only your company\'s learners will see it, on the courses you choose.';
+$string['qamanageheading'] = '{$a}: Quality Assurance documents';
+$string['qamanageintro'] = 'Your company\'s own documents, shown only to your company\'s learners on the courses you choose. Documents added by the platform appear to every learner and are managed by the site administrator.';
+$string['qamanagelink'] = 'Manage our documents';
+$string['qamanagenoaccess'] = 'You cannot manage Quality Assurance documents. Only a manager of a company can, on courses their company uses.';
+$string['qamanageothercourses'] = '+{$a} other course(s)';
+$string['qamanagetitle'] = 'Our Quality Assurance documents';
+$string['qanotapplicable'] = 'Not one of this learner\'s documents';
+$string['qaownercompany'] = 'Company: {$a}';
+$string['qaownerplatform'] = 'Platform';
+$string['qatrackernosignmanage'] = 'There are no documents that need signing on this course yet. Use "Manage our documents" to add your company\'s own.';

@@ -1458,13 +1458,38 @@ $templatedata['hasqalearner'] = false;
 $templatedata['hasqatracker'] = false;
 if ($resolvedcourseid) {
     $qactx = context_course::instance($resolvedcourseid, IGNORE_MISSING);
-    if ($qactx && !empty(\block_nvq_matrix\qa::get_course_documents((int) $resolvedcourseid))) {
-        $qastaff = has_capability('block/nvq_matrix:viewall', $qactx);
+    // Company-owned documents (IOMAD fork, v27.2.0): whether there is
+    // anything to link to depends on whose documents count. The learner
+    // link needs that learner's own documents (platform + their company);
+    // the tracker link needs documents this viewer may see, or - for a
+    // Company Manager whose company uses this course - nothing at all yet,
+    // since the tracker is where they reach "Manage our documents" to add
+    // their first one.
+    $qastaff = $qactx && has_capability('block/nvq_matrix:viewall', $qactx);
+    $qalearnerdocs = ($qactx && $studentid && ($qastaff || (int) $studentid === (int) $USER->id))
+        ? \block_nvq_matrix\qa::get_learner_documents((int) $resolvedcourseid, (int) $studentid)
+        : [];
+    // Same learners and documents as the tracker the link opens, so the
+    // two always agree - including for staff who belong to no company.
+    $qastaffdocs = $qastaff
+        ? \block_nvq_matrix\qa::get_tracker_documents((int) $resolvedcourseid,
+            array_keys(\block_nvq_matrix\qa::get_tracker_learners($qactx)))
+        : [];
+    $qacanmanage = false;
+    if ($qastaff) {
+        foreach (\block_nvq_matrix\qa::get_manageable_companies() as $qamc) {
+            if (isset($qamc->courses[(int) $resolvedcourseid])) {
+                $qacanmanage = true;
+                break;
+            }
+        }
+    }
+    if ($qactx && (!empty($qalearnerdocs) || !empty($qastaffdocs) || $qacanmanage)) {
         $qalinks = [
             'hasqalearner' => false, 'qalearnerurl' => '', 'qasummarytext' => '',
             'hasqatracker' => false, 'qatrackerurl' => '', 'qapending' => 0,
         ];
-        if ($studentid && ($qastaff || (int) $studentid === (int) $USER->id)) {
+        if (!empty($qalearnerdocs)) {
             $qasummary = \block_nvq_matrix\qa::link_summary((int) $resolvedcourseid, (int) $studentid);
             $qalinks['hasqalearner'] = true;
             $qalinks['qalearnerurl'] = (new moodle_url('/blocks/nvq_matrix/qa.php', [

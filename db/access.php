@@ -230,6 +230,29 @@ $capabilities = [
             'manager' => CAP_ALLOW,
         ],
     ],
+    // IOMAD fork (v27.2.0): a Company Manager adds, edits, hides and
+    // removes their OWN company's QA documents (qa_manage.php) and chooses
+    // which of their company's courses each applies to, shared courses
+    // included. Holding this on a course is not enough on its own: the
+    // user must also be flagged as a manager of the company in IOMAD
+    // (local_iomad_company_users.managertype = 1) and the course must be
+    // linked to that company - see qa::get_manageable_companies(). Only
+    // the two course roles a Company Manager holds get it: both IOMAD
+    // roles' archetypes name themselves, so declaring them here grants it
+    // automatically on install and the first time it is registered (the
+    // isolation guide's Section 1.5 convention). db/upgrade.php's
+    // 2026100900 step also grants it explicitly, which is harmless if
+    // already done. Site administrators manage platform documents on
+    // qa_admin.php instead.
+    'block/nvq_matrix:qamanage' => [
+        'riskbitmask'  => RISK_SPAM,
+        'captype'      => 'write',
+        'contextlevel' => CONTEXT_COURSE,
+        'archetypes'   => [
+            'companycourseeditor'    => CAP_ALLOW,
+            'companycoursenoneditor' => CAP_ALLOW,
+        ],
+    ],
     'block/nvq_matrix:exportportfolio' => [
         'captype'      => 'read',
         'contextlevel' => CONTEXT_COURSE,

@@ -60,7 +60,9 @@ $forcedownload = (bool) $download;
 
 if ($kind === 'master') {
     $doc = $DB->get_record('block_nvq_matrix_qadocs', ['id' => $id]);
-    if (!$doc || (!$doc->enabled && !is_siteadmin())) {
+    // A hidden document opens only for a site administrator, or for a
+    // manager of the company that owns it (previewing on qa_manage.php).
+    if (!$doc || (!$doc->enabled && !is_siteadmin() && !qa::can_manage_company((int) $doc->companyid))) {
         send_file_not_found();
     }
     if ($file->get_contextid() != context_system::instance()->id
@@ -96,6 +98,13 @@ if ($kind === 'master') {
     if (!$access || !$access->canview) {
         send_file_not_found();
     }
+    // No document-ownership check here (IOMAD fork, v27.2.0, deliberate):
+    // a submission can only ever be created for a document that was the
+    // learner's at the time (qa::doc_applies_to_learner() in every upload
+    // path), and get_access() above already confines the viewer to
+    // learners they may see. Checking the learner's CURRENT company here
+    // would lock a learner - and their new company's staff - out of
+    // records they signed before moving company.
 } else {
     send_file_not_found();
 }
